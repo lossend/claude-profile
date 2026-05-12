@@ -193,7 +193,7 @@ go test ./...
 The shortest release path is a single command:
 
 ```bash
-scripts/release.sh v0.1.1
+scripts/release.sh patch
 ```
 
 That command:
@@ -201,14 +201,21 @@ That command:
 - checks that you are on `main`
 - checks that the worktree is clean
 - runs `go test ./...`
+- calculates the next version tag
 - creates the tag
 - pushes `main`
 - pushes the release tag
 
+You can also publish an explicit version:
+
+```bash
+scripts/release.sh v0.1.1
+```
+
 If you want to verify the steps without changing git state:
 
 ```bash
-scripts/release.sh --dry-run v0.1.1
+scripts/release.sh --dry-run patch
 ```
 
 The GitHub release workflow is triggered by the pushed tag and then builds the downloadable archives automatically.
