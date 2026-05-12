@@ -1,3 +1,4 @@
+// @author yangjie.sun
 package main
 
 import (
@@ -552,6 +553,117 @@ func TestVersionCommandPrintsDefaultVersion(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "commit=none") || !strings.Contains(stdout, "date=unknown") {
 		t.Fatalf("expected commit and date metadata in output, got %q", stdout)
+	}
+}
+
+func TestCommitStagesAndCommitsAllChanges(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	writeJSONFileForTest(t, filepath.Join(home, ".claude", "settings.json"), map[string]any{
+		"model": "claude-sonnet",
+	})
+
+	_, stderr, err := runCLI(t, "create", "test", "--description", "Test profile")
+	if err != nil {
+		t.Fatalf("create failed: %v\nstderr=%s", err, stderr)
+	}
+
+	repoRoot := filepath.Join(home, ".claude-profile")
+	configPath := filepath.Join(repoRoot, "common", "90-shared.json")
+	config := readJSONFileForTest(t, configPath)
+	config["testKey"] = "testValue"
+	writeJSONFileForTest(t, configPath, config)
+
+	stdout, stderr, err := runCLI(t, "commit", "-m", "test commit message")
+	if err != nil {
+		t.Fatalf("commit failed: %v\nstderr=%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "committed:") {
+		t.Fatalf("expected commit success message, got %q", stdout)
+	}
+
+	cmd := exec.Command("git", "-C", repoRoot, "log", "-1", "--format=%s")
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git log failed: %v", err)
+	}
+	if strings.TrimSpace(string(output)) != "test commit message" {
+		t.Fatalf("expected commit message 'test commit message', got %q", strings.TrimSpace(string(output)))
+	}
+}
+
+func TestCommitWithPositionalArg(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	writeJSONFileForTest(t, filepath.Join(home, ".claude", "settings.json"), map[string]any{
+		"model": "claude-sonnet",
+	})
+
+	_, stderr, err := runCLI(t, "create", "test", "--description", "Test profile")
+	if err != nil {
+		t.Fatalf("create failed: %v\nstderr=%s", err, stderr)
+	}
+
+	repoRoot := filepath.Join(home, ".claude-profile")
+	configPath := filepath.Join(repoRoot, "common", "90-shared.json")
+	config := readJSONFileForTest(t, configPath)
+	config["anotherKey"] = "anotherValue"
+	writeJSONFileForTest(t, configPath, config)
+
+	stdout, stderr, err := runCLI(t, "commit", "positional message")
+	if err != nil {
+		t.Fatalf("commit failed: %v\nstderr=%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "committed:") {
+		t.Fatalf("expected commit success message, got %q", stdout)
+	}
+
+	cmd := exec.Command("git", "-C", repoRoot, "log", "-1", "--format=%s")
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git log failed: %v", err)
+	}
+	if strings.TrimSpace(string(output)) != "positional message" {
+		t.Fatalf("expected commit message 'positional message', got %q", strings.TrimSpace(string(output)))
+	}
+}
+
+func TestCommitNothingToCommit(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	writeJSONFileForTest(t, filepath.Join(home, ".claude", "settings.json"), map[string]any{
+		"model": "claude-sonnet",
+	})
+
+	_, stderr, err := runCLI(t, "create", "test", "--description", "Test profile")
+	if err != nil {
+		t.Fatalf("create failed: %v\nstderr=%s", err, stderr)
+	}
+
+	_, stderr, err = runCLI(t, "commit", "-m", "no changes")
+	if err != nil {
+		t.Fatalf("commit failed: %v\nstderr=%s", err, stderr)
+	}
+}
+
+func TestCommitOutsideGitRepo(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	repoRoot := filepath.Join(home, ".claude-profile")
+	if err := os.MkdirAll(repoRoot, 0o755); err != nil {
+		t.Fatalf("mkdir failed: %v", err)
+	}
+
+	_, _, err := runCLI(t, "commit", "-m", "test")
+	if err == nil {
+		t.Fatalf("expected commit to fail outside git repo")
+	}
+	if !strings.Contains(err.Error(), "not a git repository") {
+		t.Fatalf("expected git repo error, got %v", err)
 	}
 }
 

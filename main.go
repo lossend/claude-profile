@@ -1,3 +1,4 @@
+// @author yangjie.sun
 package main
 
 import (
@@ -90,6 +91,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newApplyCmd())
 	root.AddCommand(newDeleteCmd())
 	root.AddCommand(newListCmd())
+	root.AddCommand(newCommitCmd())
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newCompletionCmd(root))
 	return root
@@ -173,6 +175,29 @@ func newListCmd() *cobra.Command {
 			return app.listProfiles(cmd.OutOrStdout())
 		},
 	}
+}
+
+func newCommitCmd() *cobra.Command {
+	var message string
+
+	cmd := &cobra.Command{
+		Use:   "commit [message]",
+		Short: "Commit all changes in the profile repository",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			app, err := newApp()
+			if err != nil {
+				return err
+			}
+			if len(args) > 0 {
+				message = args[0]
+			}
+			return app.commitProfile(cmd.OutOrStdout(), message)
+		},
+	}
+
+	cmd.Flags().StringVarP(&message, "message", "m", "", "Commit message")
+	return cmd
 }
 
 func newVersionCmd() *cobra.Command {
@@ -425,6 +450,40 @@ func (a *app) listProfiles(stdout io.Writer) error {
 		}
 	}
 	return nil
+}
+
+func (a *app) commitProfile(stdout io.Writer, message string) error {
+	if _, err := os.Stat(filepath.Join(a.repoRoot, ".git")); err != nil {
+		return fmt.Errorf("not a git repository: %s", a.repoRoot)
+	}
+
+	cmd := exec.Command("git", "-C", a.repoRoot, "add", "-A")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git add failed: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+
+	cmd = exec.Command("git", "-C", a.repoRoot, "status", "--porcelain")
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git status failed: %w", err)
+	}
+	if len(strings.TrimSpace(string(output))) == 0 {
+		_, err = fmt.Fprintln(stdout, "nothing to commit")
+		return err
+	}
+
+	if message == "" {
+		message = "update profile config"
+	}
+	cmd = exec.Command("git", "-C", a.repoRoot, "commit", "-m", message)
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git commit failed: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+
+	_, err = fmt.Fprintf(stdout, "committed: %s\n", strings.Split(string(output), "\n")[0])
+	return err
 }
 
 func (a *app) ensureCompletionInstall(root *cobra.Command) error {
