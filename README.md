@@ -37,7 +37,7 @@ claude-profile version
 Create your first profile from the current Claude settings:
 
 ```bash
-claude-profile create openai --description "OpenAI profile"
+claude-profile create work --description "Work profile"
 ```
 
 Inspect available profiles:
@@ -49,20 +49,20 @@ claude-profile list
 Apply a profile back into Claude:
 
 ```bash
-claude-profile apply openai
+claude-profile apply work
 ```
 
 Delete a profile when you no longer need it:
 
 ```bash
-claude-profile delete openai
+claude-profile delete work
 ```
 
 Edit layered config files under:
 
 - `~/.claude-profile/common/`
-- `~/.claude-profile/profiles/openai/`
-- `~/.claude-profile/secrets/openai.json`
+- `~/.claude-profile/profiles/work/`
+- `~/.claude-profile/secrets/work.json`
 
 ## What It Does
 
@@ -105,7 +105,7 @@ Edit layered config files under:
 Create a profile from the current Claude settings file.
 
 ```bash
-claude-profile create openai --description "OpenAI profile"
+claude-profile create work --description "Work profile"
 ```
 
 Useful flags:
@@ -121,7 +121,7 @@ Useful flags:
 Rebuild `~/.claude/settings.json` from `common`, profile-specific JSON files, and the local secret overlay.
 
 ```bash
-claude-profile apply openai
+claude-profile apply work
 ```
 
 Useful flags:
@@ -141,7 +141,7 @@ claude-profile list
 Delete a profile directory and its local secret file.
 
 ```bash
-claude-profile delete openai
+claude-profile delete work
 ```
 
 `delete` requires two confirmations:
