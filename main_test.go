@@ -165,6 +165,66 @@ func TestCreateDerivesProfileDiffAgainstExistingCommon(t *testing.T) {
 	}
 }
 
+func TestCreateKeepsProviderEnvDefaultsInProfileOverrides(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	settings := map[string]any{
+		"env": map[string]any{
+			"ANTHROPIC_BASE_URL":             "https://litellm-sg.mayfair-inc.com",
+			"ANTHROPIC_DEFAULT_HAIKU_MODEL":  "pub-deepseek-v4-flash",
+			"ANTHROPIC_DEFAULT_OPUS_MODEL":   "pub-claude-opus-4-6",
+			"ANTHROPIC_DEFAULT_SONNET_MODEL": "pub-glm-5",
+			"ANTHROPIC_MODEL":                "us.anthropic.claude-sonnet-4-6",
+			"ANTHROPIC_SMALL_FAST_MODEL":     "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+			"AWS_PROFILE":                    "prod-use-uis",
+			"CLAUDE_CODE_USE_BEDROCK":        1,
+			"LOG_LEVEL":                      "debug",
+		},
+		"model": "claude-sonnet",
+	}
+	writeJSONFileForTest(t, filepath.Join(home, ".claude", "settings.json"), settings)
+
+	_, stderr, err := runCLI(t, "create", "bedrock", "--description", "Bedrock profile")
+	if err != nil {
+		t.Fatalf("create failed: %v\nstderr=%s", err, stderr)
+	}
+
+	repoRoot := filepath.Join(home, ".claude-profile")
+	commonShared := readJSONFileForTest(t, filepath.Join(repoRoot, "common", "90-shared.json"))
+	sharedEnv := commonShared["env"].(map[string]any)
+	if sharedEnv["LOG_LEVEL"] != "debug" {
+		t.Fatalf("expected unrelated env to stay in common shared config: %#v", sharedEnv)
+	}
+	for _, key := range []string{
+		"ANTHROPIC_BASE_URL",
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL",
+		"ANTHROPIC_DEFAULT_OPUS_MODEL",
+		"ANTHROPIC_DEFAULT_SONNET_MODEL",
+		"ANTHROPIC_MODEL",
+		"ANTHROPIC_SMALL_FAST_MODEL",
+		"AWS_PROFILE",
+		"CLAUDE_CODE_USE_BEDROCK",
+	} {
+		if _, ok := sharedEnv[key]; ok {
+			t.Fatalf("did not expect %s in common shared config: %#v", key, sharedEnv)
+		}
+	}
+
+	profileConfig := readJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "bedrock", starterProfileConfigFile))
+	profileEnv := profileConfig["env"].(map[string]any)
+	if profileEnv["ANTHROPIC_BASE_URL"] != "https://litellm-sg.mayfair-inc.com" ||
+		profileEnv["ANTHROPIC_DEFAULT_HAIKU_MODEL"] != "pub-deepseek-v4-flash" ||
+		profileEnv["ANTHROPIC_DEFAULT_OPUS_MODEL"] != "pub-claude-opus-4-6" ||
+		profileEnv["ANTHROPIC_DEFAULT_SONNET_MODEL"] != "pub-glm-5" ||
+		profileEnv["ANTHROPIC_MODEL"] != "us.anthropic.claude-sonnet-4-6" ||
+		profileEnv["ANTHROPIC_SMALL_FAST_MODEL"] != "us.anthropic.claude-haiku-4-5-20251001-v1:0" ||
+		profileEnv["AWS_PROFILE"] != "prod-use-uis" ||
+		profileEnv["CLAUDE_CODE_USE_BEDROCK"] != float64(1) {
+		t.Fatalf("expected provider env defaults in profile overrides: %#v", profileEnv)
+	}
+}
+
 func TestApplyMergesCommonProfileAndSecretsWithBackup(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -373,6 +433,79 @@ func TestVersionCommandPrintsDefaultVersion(t *testing.T) {
 	}
 }
 
+func TestDeleteRemovesProfileAfterDoubleConfirmation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	repoRoot := filepath.Join(home, ".claude-profile")
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "common", "90-shared.json"), map[string]any{
+		"model": "shared-model",
+	})
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", "profile.json"), map[string]any{
+		"name":        "openai",
+		"description": "OpenAI profile",
+	})
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", starterProfileConfigFile), map[string]any{
+		"model": "profile-model",
+	})
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "secrets", "openai.json"), map[string]any{
+		"env": map[string]any{"OPENAI_API_KEY": "secret"},
+	})
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "state", "active.json"), map[string]any{
+		"name": "openai",
+	})
+
+	stdout, stderr, err := runCLIWithInput(t, "openai\nDELETE\n", "delete", "openai")
+	if err != nil {
+		t.Fatalf("delete failed: %v\nstdout=%s\nstderr=%s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "deleted profile \"openai\"") {
+		t.Fatalf("expected success output, got %q", stdout)
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "profiles", "openai")); !os.IsNotExist(err) {
+		t.Fatalf("expected profile directory deleted, got err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "secrets", "openai.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected secret file deleted, got err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "common", "90-shared.json")); err != nil {
+		t.Fatalf("expected common config preserved: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "state", "active.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected active state removed for deleted profile, got err=%v", err)
+	}
+}
+
+func TestDeleteRejectsWhenConfirmationDoesNotMatch(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	repoRoot := filepath.Join(home, ".claude-profile")
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", "profile.json"), map[string]any{
+		"name": "openai",
+	})
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", starterProfileConfigFile), map[string]any{
+		"model": "profile-model",
+	})
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "secrets", "openai.json"), map[string]any{
+		"env": map[string]any{"OPENAI_API_KEY": "secret"},
+	})
+
+	stdout, stderr, err := runCLIWithInput(t, "wrong\nDELETE\n", "delete", "openai")
+	if err == nil {
+		t.Fatalf("expected delete to fail on wrong confirmation\nstdout=%s\nstderr=%s", stdout, stderr)
+	}
+	if !strings.Contains(err.Error(), "aborted") {
+		t.Fatalf("expected abort error, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "profiles", "openai", "profile.json")); err != nil {
+		t.Fatalf("expected profile to remain after rejected delete: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "secrets", "openai.json")); err != nil {
+		t.Fatalf("expected secret to remain after rejected delete: %v", err)
+	}
+}
+
 func TestGitIgnoreKeepsSecretsStateAndBackupsOutOfGitStatus(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -478,6 +611,21 @@ func runCLI(t *testing.T, args ...string) (string, string, error) {
 	stderr := &bytes.Buffer{}
 	cmd.SetOut(stdout)
 	cmd.SetErr(stderr)
+	cmd.SetArgs(args)
+
+	err := cmd.Execute()
+	return stdout.String(), stderr.String(), err
+}
+
+func runCLIWithInput(t *testing.T, input string, args ...string) (string, string, error) {
+	t.Helper()
+
+	cmd := newRootCmd()
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+	cmd.SetIn(strings.NewReader(input))
 	cmd.SetArgs(args)
 
 	err := cmd.Execute()

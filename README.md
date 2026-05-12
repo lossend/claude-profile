@@ -1,10 +1,8 @@
 # claude-profile
 
-`claude-profile` is a small Go CLI for managing layered Claude settings profiles out of a local `~/.claude-profile` repository.
+`claude-profile` is a small CLI for managing layered Claude settings profiles out of a local `~/.claude-profile` repository.
 
 ## Install
-
-### Without Go
 
 Install the latest release binary:
 
@@ -22,12 +20,6 @@ Install a specific release:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/lossend/claude-profile/main/scripts/install.sh | VERSION=v0.1.0 sh
-```
-
-### With Go
-
-```bash
-go install .
 ```
 
 ### From a downloaded release asset
@@ -59,6 +51,18 @@ Apply a profile back into Claude:
 ```bash
 claude-profile apply openai
 ```
+
+Delete a profile when you no longer need it:
+
+```bash
+claude-profile delete openai
+```
+
+Edit layered config files under:
+
+- `~/.claude-profile/common/`
+- `~/.claude-profile/profiles/openai/`
+- `~/.claude-profile/secrets/openai.json`
 
 ## What It Does
 
@@ -101,7 +105,7 @@ claude-profile apply openai
 Create a profile from the current Claude settings file.
 
 ```bash
-go run . create openai --description "OpenAI profile"
+claude-profile create openai --description "OpenAI profile"
 ```
 
 Useful flags:
@@ -117,7 +121,7 @@ Useful flags:
 Rebuild `~/.claude/settings.json` from `common`, profile-specific JSON files, and the local secret overlay.
 
 ```bash
-go run . apply openai
+claude-profile apply openai
 ```
 
 Useful flags:
@@ -129,8 +133,23 @@ Useful flags:
 List available profiles, their description, config files, secret presence, and active marker.
 
 ```bash
-go run . list
+claude-profile list
 ```
+
+### `delete`
+
+Delete a profile directory and its local secret file.
+
+```bash
+claude-profile delete openai
+```
+
+`delete` requires two confirmations:
+
+- first type the profile name exactly
+- then type `DELETE`
+
+If either confirmation does not match, the command aborts without changing any files.
 
 ## Merge Rules
 
@@ -152,6 +171,16 @@ Keys are treated as sensitive when the final path segment:
 Sensitive paths are written to `secrets/<name>.json` and stay out of Git history.
 
 ## Development
+
+### Build from source
+
+If you are developing locally and do have Go installed:
+
+```bash
+go install .
+```
+
+### Test
 
 Run the test suite with:
 

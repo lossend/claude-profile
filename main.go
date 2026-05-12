@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +27,17 @@ var (
 	commit    = "none"
 	buildDate = "unknown"
 )
+
+var profileScopedEnvKeys = map[string]struct{}{
+	"ANTHROPIC_BASE_URL":             {},
+	"ANTHROPIC_DEFAULT_HAIKU_MODEL":  {},
+	"ANTHROPIC_DEFAULT_OPUS_MODEL":   {},
+	"ANTHROPIC_DEFAULT_SONNET_MODEL": {},
+	"ANTHROPIC_MODEL":                {},
+	"ANTHROPIC_SMALL_FAST_MODEL":     {},
+	"AWS_PROFILE":                    {},
+	"CLAUDE_CODE_USE_BEDROCK":        {},
+}
 
 type app struct {
 	home     string
@@ -76,6 +88,7 @@ func newRootCmd() *cobra.Command {
 
 	root.AddCommand(newCreateCmd())
 	root.AddCommand(newApplyCmd())
+	root.AddCommand(newDeleteCmd())
 	root.AddCommand(newListCmd())
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newCompletionCmd(root))
@@ -130,6 +143,21 @@ func newApplyCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&targetPath, "target", "", "Target Claude settings path")
 	return cmd
+}
+
+func newDeleteCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "delete <name>",
+		Short: "Delete a profile after double confirmation",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			app, err := newApp()
+			if err != nil {
+				return err
+			}
+			return app.deleteProfile(cmd.InOrStdin(), cmd.OutOrStdout(), args[0])
+		},
+	}
 }
 
 func newListCmd() *cobra.Command {
@@ -226,6 +254,10 @@ func (a *app) createProfile(stderr io.Writer, name, description, sourcePath stri
 	}
 	diff := diffValues(baseline, settings)
 	profileDiff, secretDiff := splitSensitiveTree(diff)
+	profileDiff = mergeMaps(
+		ensureJSONObject(profileDiff),
+		extractProfileScopedSettings(settings),
+	)
 
 	profileDir := filepath.Join(a.repoRoot, "profiles", name)
 	if err := a.prepareProfileDir(profileDir, force); err != nil {
@@ -280,6 +312,43 @@ func (a *app) applyProfile(stderr io.Writer, name, targetPath string) error {
 		return err
 	}
 	return a.writeActiveProfile(name)
+}
+
+func (a *app) deleteProfile(stdin io.Reader, stdout io.Writer, name string) error {
+	profileDir := filepath.Join(a.repoRoot, "profiles", name)
+	if _, err := os.Stat(filepath.Join(profileDir, "profile.json")); err != nil {
+		return fmt.Errorf("profile %q not found", name)
+	}
+
+	reader := bufio.NewReader(stdin)
+	if err := confirmDelete(reader, stdout, fmt.Sprintf("Type the profile name (%s) to continue: ", name), name); err != nil {
+		return err
+	}
+	if err := confirmDelete(reader, stdout, "Type DELETE to permanently remove this profile: ", "DELETE"); err != nil {
+		return err
+	}
+
+	if err := os.RemoveAll(profileDir); err != nil {
+		return fmt.Errorf("delete profile directory: %w", err)
+	}
+
+	secretPath := filepath.Join(a.repoRoot, "secrets", name+".json")
+	if err := os.Remove(secretPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("delete secret file: %w", err)
+	}
+
+	if active, err := a.readOptionalJSONFile(filepath.Join(a.repoRoot, "state", "active.json")); err == nil && active != nil {
+		if activeName, ok := active["name"].(string); ok && activeName == name {
+			if err := os.Remove(filepath.Join(a.repoRoot, "state", "active.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("delete active state: %w", err)
+			}
+		}
+	} else if err != nil {
+		return err
+	}
+
+	_, err := fmt.Fprintf(stdout, "deleted profile %q\n", name)
+	return err
 }
 
 func (a *app) listProfiles(stdout io.Writer) error {
@@ -448,6 +517,7 @@ func (a *app) ensureGitIgnore() error {
 func (a *app) writeStarterCommon(settings map[string]any) error {
 	nonSensitive, _ := splitSensitiveTree(settings)
 	nonSensitiveMap := ensureJSONObject(nonSensitive)
+	nonSensitiveMap = stripProfileScopedSettings(nonSensitiveMap)
 
 	hooks := selectKeys(nonSensitiveMap, "hooks")
 	security := selectKeys(nonSensitiveMap, "permissions", "sandbox", "skipAutoPermissionPrompt", "skipDangerousModePermissionPrompt")
@@ -665,6 +735,20 @@ func ensureTextContains(path, marker, block string) error {
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
+func confirmDelete(reader *bufio.Reader, stdout io.Writer, prompt, expected string) error {
+	if _, err := fmt.Fprint(stdout, prompt); err != nil {
+		return err
+	}
+	input, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	if strings.TrimSpace(input) != expected {
+		return fmt.Errorf("delete aborted: confirmation did not match")
+	}
+	return nil
+}
+
 func marshalJSON(data map[string]any) ([]byte, error) {
 	raw, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
@@ -785,6 +869,51 @@ func selectKeys(input map[string]any, keys ...string) map[string]any {
 			out[key] = cloneValue(value)
 		}
 	}
+	return out
+}
+
+func extractProfileScopedSettings(settings map[string]any) map[string]any {
+	envValue, ok := settings["env"]
+	if !ok {
+		return map[string]any{}
+	}
+	envMap, ok := envValue.(map[string]any)
+	if !ok {
+		return map[string]any{}
+	}
+
+	profileEnv := map[string]any{}
+	for key := range profileScopedEnvKeys {
+		if value, exists := envMap[key]; exists {
+			profileEnv[key] = cloneValue(value)
+		}
+	}
+	if len(profileEnv) == 0 {
+		return map[string]any{}
+	}
+	return map[string]any{"env": profileEnv}
+}
+
+func stripProfileScopedSettings(settings map[string]any) map[string]any {
+	out := cloneMap(settings)
+	envValue, ok := out["env"]
+	if !ok {
+		return out
+	}
+	envMap, ok := envValue.(map[string]any)
+	if !ok {
+		return out
+	}
+
+	filteredEnv := cloneMap(envMap)
+	for key := range profileScopedEnvKeys {
+		delete(filteredEnv, key)
+	}
+	if len(filteredEnv) == 0 {
+		delete(out, "env")
+		return out
+	}
+	out["env"] = filteredEnv
 	return out
 }
 
