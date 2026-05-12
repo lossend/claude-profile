@@ -20,6 +20,12 @@ const (
 	gitIgnoreContent = "secrets/\nstate/\nbackups/\n"
 )
 
+var (
+	version   = "dev"
+	commit    = "none"
+	buildDate = "unknown"
+)
+
 type app struct {
 	home     string
 	repoRoot string
@@ -70,6 +76,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newCreateCmd())
 	root.AddCommand(newApplyCmd())
 	root.AddCommand(newListCmd())
+	root.AddCommand(newVersionCmd())
 	root.AddCommand(newCompletionCmd(root))
 	return root
 }
@@ -135,6 +142,18 @@ func newListCmd() *cobra.Command {
 				return err
 			}
 			return app.listProfiles(cmd.OutOrStdout())
+		},
+	}
+}
+
+func newVersionCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Print build version information",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "claude-profile %s commit=%s date=%s\n", version, commit, buildDate)
+			return err
 		},
 	}
 }

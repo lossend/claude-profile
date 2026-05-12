@@ -344,6 +344,35 @@ func TestShellCompletionInstallationIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestVersionCommandPrintsDefaultVersion(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	originalVersion := version
+	originalCommit := commit
+	originalDate := buildDate
+	t.Cleanup(func() {
+		version = originalVersion
+		commit = originalCommit
+		buildDate = originalDate
+	})
+
+	version = "dev"
+	commit = "none"
+	buildDate = "unknown"
+
+	stdout, stderr, err := runCLI(t, "version")
+	if err != nil {
+		t.Fatalf("version failed: %v\nstderr=%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "claude-profile dev") {
+		t.Fatalf("expected version string in output, got %q", stdout)
+	}
+	if !strings.Contains(stdout, "commit=none") || !strings.Contains(stdout, "date=unknown") {
+		t.Fatalf("expected commit and date metadata in output, got %q", stdout)
+	}
+}
+
 func TestGitIgnoreKeepsSecretsStateAndBackupsOutOfGitStatus(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

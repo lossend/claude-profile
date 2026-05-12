@@ -2,6 +2,64 @@
 
 `claude-profile` is a small Go CLI for managing layered Claude settings profiles out of a local `~/.claude-profile` repository.
 
+## Install
+
+### Without Go
+
+Install the latest release binary:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lossend/claude-profile/main/scripts/install.sh | sh
+```
+
+Install to a custom directory:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lossend/claude-profile/main/scripts/install.sh | BINDIR="$HOME/bin" sh
+```
+
+Install a specific release:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lossend/claude-profile/main/scripts/install.sh | VERSION=v0.1.0 sh
+```
+
+### With Go
+
+```bash
+go install .
+```
+
+### From a downloaded release asset
+
+Download the archive for your OS and architecture from GitHub Releases, extract it, and place the `claude-profile` binary on your `PATH`.
+
+Verify the installed binary:
+
+```bash
+claude-profile version
+```
+
+## Quick Start
+
+Create your first profile from the current Claude settings:
+
+```bash
+claude-profile create openai --description "OpenAI profile"
+```
+
+Inspect available profiles:
+
+```bash
+claude-profile list
+```
+
+Apply a profile back into Claude:
+
+```bash
+claude-profile apply openai
+```
+
 ## What It Does
 
 - Bootstraps `~/.claude-profile` as a local Git repository on first `create`
@@ -96,4 +154,25 @@ Run the test suite with:
 
 ```bash
 go test ./...
+```
+
+## Release
+
+Build local release artifacts into `dist/`:
+
+```bash
+scripts/build-release.sh
+```
+
+Build a tagged release locally:
+
+```bash
+VERSION=v0.1.0 scripts/build-release.sh
+```
+
+The release workflow publishes artifacts when a tag like `v0.1.0` is pushed:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
 ```
