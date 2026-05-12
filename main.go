@@ -275,7 +275,19 @@ func (a *app) createProfile(stdin io.Reader, stdout io.Writer, name, description
 	if err := a.writeJSONFile(secretPath, ensureJSONObject(secretDiff)); err != nil {
 		return err
 	}
-	return a.writeActiveProfile(name)
+	if err := a.writeActiveProfile(name); err != nil {
+		return err
+	}
+
+	_, err = fmt.Fprintf(
+		stdout,
+		"created profile %q\nprofile config: %s\nlocal secrets: %s\nnext: claude-profile apply %s\n",
+		name,
+		profileDir,
+		secretPath,
+		name,
+	)
+	return err
 }
 
 func (a *app) applyProfile(stderr io.Writer, name, targetPath string) error {

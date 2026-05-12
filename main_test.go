@@ -41,6 +41,13 @@ func TestCreateBootstrapsProfileRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create failed: %v\nstderr=%s", err, stderr)
 	}
+	stdout, _, err := runCLI(t, "list")
+	if err != nil {
+		t.Fatalf("list failed after create: %v", err)
+	}
+	if !strings.Contains(stdout, "* openai") {
+		t.Fatalf("expected profile to be active after create, got %q", stdout)
+	}
 
 	repoRoot := filepath.Join(home, ".claude-profile")
 	assertFileExists(t, filepath.Join(repoRoot, ".git"))
@@ -87,6 +94,37 @@ func TestCreateBootstrapsProfileRepo(t *testing.T) {
 	active := readJSONFileForTest(t, filepath.Join(repoRoot, "state", "active.json"))
 	if active["name"] != "openai" {
 		t.Fatalf("expected create to mark active profile, got %#v", active)
+	}
+}
+
+func TestCreatePrintsSuccessMessageWithPaths(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	writeJSONFileForTest(t, filepath.Join(home, ".claude", "settings.json"), map[string]any{
+		"model": "claude-sonnet",
+	})
+
+	stdout, stderr, err := runCLI(t, "create", "litellm-glm", "--description", "Work profile")
+	if err != nil {
+		t.Fatalf("create failed: %v\nstderr=%s", err, stderr)
+	}
+
+	repoRoot := filepath.Join(home, ".claude-profile")
+	profileDir := filepath.Join(repoRoot, "profiles", "litellm-glm")
+	secretPath := filepath.Join(repoRoot, "secrets", "litellm-glm.json")
+
+	if !strings.Contains(stdout, "created profile \"litellm-glm\"") {
+		t.Fatalf("expected success message, got %q", stdout)
+	}
+	if !strings.Contains(stdout, profileDir) {
+		t.Fatalf("expected profile directory in output, got %q", stdout)
+	}
+	if !strings.Contains(stdout, secretPath) {
+		t.Fatalf("expected secret path in output, got %q", stdout)
+	}
+	if !strings.Contains(stdout, "claude-profile apply litellm-glm") {
+		t.Fatalf("expected next step in output, got %q", stdout)
 	}
 }
 
