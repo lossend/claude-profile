@@ -190,21 +190,31 @@ go test ./...
 
 ## Release
 
-Build local release artifacts into `dist/`:
+The shortest release path is a single command:
+
+```bash
+scripts/release.sh v0.1.1
+```
+
+That command:
+
+- checks that you are on `main`
+- checks that the worktree is clean
+- runs `go test ./...`
+- creates the tag
+- pushes `main`
+- pushes the release tag
+
+If you want to verify the steps without changing git state:
+
+```bash
+scripts/release.sh --dry-run v0.1.1
+```
+
+The GitHub release workflow is triggered by the pushed tag and then builds the downloadable archives automatically.
+
+If you only want local artifacts without publishing:
 
 ```bash
 scripts/build-release.sh
-```
-
-Build a tagged release locally:
-
-```bash
-VERSION=v0.1.0 scripts/build-release.sh
-```
-
-The release workflow publishes artifacts when a tag like `v0.1.0` is pushed:
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
 ```
