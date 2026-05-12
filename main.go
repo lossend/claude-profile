@@ -21,6 +21,8 @@ import (
 const (
 	gitIgnoreContent         = "secrets/\nstate/\nbackups/\n"
 	starterProfileConfigFile = "10-config.json"
+	fallbackGitUserName      = "claude-profile"
+	fallbackGitUserEmail     = "claude-profile@local"
 )
 
 var (
@@ -477,6 +479,7 @@ func (a *app) commitProfile(stdout io.Writer, message string) error {
 		message = "update profile config"
 	}
 	cmd = exec.Command("git", "-C", a.repoRoot, "commit", "-m", message)
+	cmd.Env = a.commitEnv()
 	output, err = cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("git commit failed: %w: %s", err, strings.TrimSpace(string(output)))
@@ -484,6 +487,43 @@ func (a *app) commitProfile(stdout io.Writer, message string) error {
 
 	_, err = fmt.Fprintf(stdout, "committed: %s\n", strings.Split(string(output), "\n")[0])
 	return err
+}
+
+func (a *app) commitEnv() []string {
+	env := os.Environ()
+	if a.hasGitIdentity(env) {
+		return env
+	}
+
+	return withEnvOverrides(env, map[string]string{
+		"GIT_AUTHOR_NAME":     fallbackGitUserName,
+		"GIT_AUTHOR_EMAIL":    fallbackGitUserEmail,
+		"GIT_COMMITTER_NAME":  fallbackGitUserName,
+		"GIT_COMMITTER_EMAIL": fallbackGitUserEmail,
+	})
+}
+
+func (a *app) hasGitIdentity(env []string) bool {
+	cmd := exec.Command("git", "-C", a.repoRoot, "var", "GIT_AUTHOR_IDENT")
+	cmd.Env = env
+	return cmd.Run() == nil
+}
+
+func withEnvOverrides(base []string, overrides map[string]string) []string {
+	filtered := make([]string, 0, len(base)+len(overrides))
+	for _, entry := range base {
+		key, _, ok := strings.Cut(entry, "=")
+		if ok {
+			if _, exists := overrides[key]; exists {
+				continue
+			}
+		}
+		filtered = append(filtered, entry)
+	}
+	for key, value := range overrides {
+		filtered = append(filtered, key+"="+value)
+	}
+	return filtered
 }
 
 func (a *app) ensureCompletionInstall(root *cobra.Command) error {

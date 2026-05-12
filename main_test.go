@@ -649,6 +649,52 @@ func TestCommitNothingToCommit(t *testing.T) {
 	}
 }
 
+func TestCommitUsesFallbackGitIdentityWhenUnavailable(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_AUTHOR_NAME", "")
+	t.Setenv("GIT_AUTHOR_EMAIL", "")
+	t.Setenv("GIT_COMMITTER_NAME", "")
+	t.Setenv("GIT_COMMITTER_EMAIL", "")
+	t.Setenv("EMAIL", "")
+	t.Setenv("USER", "")
+	t.Setenv("LOGNAME", "")
+
+	writeJSONFileForTest(t, filepath.Join(home, ".claude", "settings.json"), map[string]any{
+		"model": "claude-sonnet",
+	})
+
+	_, stderr, err := runCLI(t, "create", "test", "--description", "Test profile")
+	if err != nil {
+		t.Fatalf("create failed: %v\nstderr=%s", err, stderr)
+	}
+
+	repoRoot := filepath.Join(home, ".claude-profile")
+	configPath := filepath.Join(repoRoot, "common", "90-shared.json")
+	config := readJSONFileForTest(t, configPath)
+	config["testKey"] = "testValue"
+	writeJSONFileForTest(t, configPath, config)
+
+	stdout, stderr, err := runCLI(t, "commit", "-m", "fallback identity commit")
+	if err != nil {
+		t.Fatalf("commit failed: %v\nstderr=%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "committed:") {
+		t.Fatalf("expected commit success message, got %q", stdout)
+	}
+
+	cmd := exec.Command("git", "-C", repoRoot, "log", "-1", "--format=%an <%ae>")
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git log failed: %v", err)
+	}
+	if strings.TrimSpace(string(output)) != "claude-profile <claude-profile@local>" {
+		t.Fatalf("expected fallback git identity, got %q", strings.TrimSpace(string(output)))
+	}
+}
+
 func TestCommitOutsideGitRepo(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
