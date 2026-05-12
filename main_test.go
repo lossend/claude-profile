@@ -54,7 +54,7 @@ func TestCreateBootstrapsProfileRepo(t *testing.T) {
 	assertFileExists(t, filepath.Join(repoRoot, ".git"))
 	assertFileContent(t, filepath.Join(repoRoot, ".gitignore"), "secrets/\nstate/\nbackups/\n")
 
-	profileMeta := readJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", "profile.json"))
+	profileMeta := readJSONFileForTest(t, profileManifestPath(repoRoot, "openai"))
 	if profileMeta["name"] != "openai" || profileMeta["description"] != "OpenAI profile" {
 		t.Fatalf("unexpected profile metadata: %#v", profileMeta)
 	}
@@ -82,7 +82,7 @@ func TestCreateBootstrapsProfileRepo(t *testing.T) {
 		t.Fatalf("did not expect sensitive key in shared config: %#v", commonShared)
 	}
 
-	profileConfig := readJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", starterProfileConfigFile))
+	profileConfig := readJSONFileForTest(t, starterProfileLayerPath(repoRoot, "openai"))
 	if len(profileConfig) != 0 {
 		t.Fatalf("expected empty profile diff for first profile, got %#v", profileConfig)
 	}
@@ -181,7 +181,7 @@ func TestCreateDerivesProfileDiffAgainstExistingCommon(t *testing.T) {
 		t.Fatalf("create failed: %v\nstderr=%s", err, stderr)
 	}
 
-	profileConfig := readJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "bedrock", starterProfileConfigFile))
+	profileConfig := readJSONFileForTest(t, starterProfileLayerPath(repoRoot, "bedrock"))
 	if profileConfig["model"] != "profile-model" {
 		t.Fatalf("expected model diff in profile config: %#v", profileConfig)
 	}
@@ -250,7 +250,7 @@ func TestCreateKeepsProviderEnvDefaultsInProfileOverrides(t *testing.T) {
 		}
 	}
 
-	profileConfig := readJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "bedrock", starterProfileConfigFile))
+	profileConfig := readJSONFileForTest(t, starterProfileLayerPath(repoRoot, "bedrock"))
 	profileEnv := profileConfig["env"].(map[string]any)
 	if profileEnv["ANTHROPIC_BASE_URL"] != "https://litellm-sg.mayfair-inc.com" ||
 		profileEnv["ANTHROPIC_DEFAULT_HAIKU_MODEL"] != "pub-deepseek-v4-flash" ||
@@ -293,11 +293,11 @@ func TestCreateForceRequiresDoubleConfirmation(t *testing.T) {
 	writeJSONFileForTest(t, filepath.Join(home, ".claude", "settings.json"), map[string]any{
 		"model": "new-model",
 	})
-	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "work", "profile.json"), map[string]any{
+	writeJSONFileForTest(t, profileManifestPath(repoRoot, "work"), map[string]any{
 		"name":        "work",
 		"description": "Old work profile",
 	})
-	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "work", starterProfileConfigFile), map[string]any{
+	writeJSONFileForTest(t, starterProfileLayerPath(repoRoot, "work"), map[string]any{
 		"model": "old-model",
 	})
 	writeJSONFileForTest(t, filepath.Join(repoRoot, "secrets", "work.json"), map[string]any{
@@ -308,7 +308,7 @@ func TestCreateForceRequiresDoubleConfirmation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected forced create to succeed: %v\nstdout=%s\nstderr=%s", err, stdout, stderr)
 	}
-	profileMeta := readJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "work", "profile.json"))
+	profileMeta := readJSONFileForTest(t, profileManifestPath(repoRoot, "work"))
 	if profileMeta["description"] != "New work profile" {
 		t.Fatalf("expected profile metadata to be replaced, got %#v", profileMeta)
 	}
@@ -322,11 +322,11 @@ func TestCreateForceRejectsWrongConfirmation(t *testing.T) {
 	writeJSONFileForTest(t, filepath.Join(home, ".claude", "settings.json"), map[string]any{
 		"model": "new-model",
 	})
-	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "work", "profile.json"), map[string]any{
+	writeJSONFileForTest(t, profileManifestPath(repoRoot, "work"), map[string]any{
 		"name":        "work",
 		"description": "Old work profile",
 	})
-	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "work", starterProfileConfigFile), map[string]any{
+	writeJSONFileForTest(t, starterProfileLayerPath(repoRoot, "work"), map[string]any{
 		"model": "old-model",
 	})
 
@@ -338,7 +338,7 @@ func TestCreateForceRejectsWrongConfirmation(t *testing.T) {
 		t.Fatalf("expected abort error, got %v", err)
 	}
 
-	profileMeta := readJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "work", "profile.json"))
+	profileMeta := readJSONFileForTest(t, profileManifestPath(repoRoot, "work"))
 	if profileMeta["description"] != "Old work profile" {
 		t.Fatalf("expected original profile to remain unchanged, got %#v", profileMeta)
 	}
@@ -357,18 +357,18 @@ func TestApplyMergesCommonProfileAndSecretsWithBackup(t *testing.T) {
 			"shared": "common",
 		},
 	})
-	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", "profile.json"), map[string]any{
+	writeJSONFileForTest(t, profileManifestPath(repoRoot, "openai"), map[string]any{
 		"name":        "openai",
 		"description": "OpenAI profile",
 	})
-	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", starterProfileConfigFile), map[string]any{
+	writeJSONFileForTest(t, starterProfileLayerPath(repoRoot, "openai"), map[string]any{
 		"nested": map[string]any{
 			"level": "profile",
 		},
 		"provider":  "openai",
 		"providers": []any{"profile"},
 	})
-	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", "20-models.json"), map[string]any{
+	writeJSONFileForTest(t, profileLayerPath(repoRoot, "openai", "020-models.json"), map[string]any{
 		"model":     "gpt-4.1",
 		"providers": []any{"override"},
 	})
@@ -381,9 +381,15 @@ func TestApplyMergesCommonProfileAndSecretsWithBackup(t *testing.T) {
 		"legacy": true,
 	})
 
-	_, stderr, err := runCLI(t, "apply", "openai")
+	stdout, stderr, err := runCLI(t, "apply", "openai")
 	if err != nil {
 		t.Fatalf("apply failed: %v\nstderr=%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "applied profile \"openai\"") {
+		t.Fatalf("expected apply success output, got %q", stdout)
+	}
+	if !strings.Contains(stdout, filepath.Join(home, ".claude", "settings.json")) {
+		t.Fatalf("expected target path in apply output, got %q", stdout)
 	}
 
 	applied := readJSONFileForTest(t, filepath.Join(home, ".claude", "settings.json"))
@@ -424,10 +430,10 @@ func TestApplyWarnsWhenSecretFileMissing(t *testing.T) {
 	writeJSONFileForTest(t, filepath.Join(repoRoot, "common", "10-base.json"), map[string]any{
 		"model": "common-model",
 	})
-	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", "profile.json"), map[string]any{
+	writeJSONFileForTest(t, profileManifestPath(repoRoot, "openai"), map[string]any{
 		"name": "openai",
 	})
-	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", starterProfileConfigFile), map[string]any{
+	writeJSONFileForTest(t, starterProfileLayerPath(repoRoot, "openai"), map[string]any{
 		"model": "profile-model",
 	})
 
@@ -445,24 +451,24 @@ func TestListShowsProfilesFilesSecretsAndActiveMarker(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	repoRoot := filepath.Join(home, ".claude-profile")
-	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", "profile.json"), map[string]any{
+	writeJSONFileForTest(t, profileManifestPath(repoRoot, "openai"), map[string]any{
 		"name":        "openai",
 		"description": "OpenAI profile",
 	})
-	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", starterProfileConfigFile), map[string]any{
+	writeJSONFileForTest(t, starterProfileLayerPath(repoRoot, "openai"), map[string]any{
 		"model": "gpt-4.1",
 	})
-	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", "20-models.json"), map[string]any{
+	writeJSONFileForTest(t, profileLayerPath(repoRoot, "openai", "020-models.json"), map[string]any{
 		"model": "gpt-4.1-mini",
 	})
 	writeJSONFileForTest(t, filepath.Join(repoRoot, "secrets", "openai.json"), map[string]any{
 		"env": map[string]any{"OPENAI_API_KEY": "x"},
 	})
-	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "bedrock", "profile.json"), map[string]any{
+	writeJSONFileForTest(t, profileManifestPath(repoRoot, "bedrock"), map[string]any{
 		"name":        "bedrock",
 		"description": "Bedrock profile",
 	})
-	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "bedrock", starterProfileConfigFile), map[string]any{
+	writeJSONFileForTest(t, starterProfileLayerPath(repoRoot, "bedrock"), map[string]any{
 		"model": "claude-sonnet",
 	})
 	writeJSONFileForTest(t, filepath.Join(repoRoot, "state", "active.json"), map[string]any{
@@ -476,7 +482,7 @@ func TestListShowsProfilesFilesSecretsAndActiveMarker(t *testing.T) {
 	if !strings.Contains(stdout, "* openai") {
 		t.Fatalf("expected active profile marker in output: %q", stdout)
 	}
-	if !strings.Contains(stdout, "files="+starterProfileConfigFile+",20-models.json") {
+	if !strings.Contains(stdout, "files=010-config.json,020-models.json") {
 		t.Fatalf("expected config file names in output: %q", stdout)
 	}
 	if !strings.Contains(stdout, "secret=yes") || !strings.Contains(stdout, "secret=no") {
@@ -524,6 +530,33 @@ func TestShellCompletionInstallationIsIdempotent(t *testing.T) {
 		if !ok || shellState["installed"] != true {
 			t.Fatalf("expected installed state for %s, got %#v", shell, state)
 		}
+	}
+}
+
+func TestApplyCommandCompletesProfileNames(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	repoRoot := filepath.Join(home, ".claude-profile")
+	writeJSONFileForTest(t, profileManifestPath(repoRoot, "openai"), map[string]any{
+		"name": "openai",
+	})
+	writeJSONFileForTest(t, starterProfileLayerPath(repoRoot, "openai"), map[string]any{
+		"model": "gpt-4.1",
+	})
+	writeJSONFileForTest(t, profileManifestPath(repoRoot, "bedrock"), map[string]any{
+		"name": "bedrock",
+	})
+	writeJSONFileForTest(t, starterProfileLayerPath(repoRoot, "bedrock"), map[string]any{
+		"model": "claude-sonnet",
+	})
+
+	stdout, stderr, err := runCLI(t, "__complete", "apply", "")
+	if err != nil {
+		t.Fatalf("completion failed: %v\nstderr=%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "openai") || !strings.Contains(stdout, "bedrock") {
+		t.Fatalf("expected profile names in completion output, got %q", stdout)
 	}
 }
 
@@ -721,11 +754,11 @@ func TestDeleteRemovesProfileAfterDoubleConfirmation(t *testing.T) {
 	writeJSONFileForTest(t, filepath.Join(repoRoot, "common", "90-shared.json"), map[string]any{
 		"model": "shared-model",
 	})
-	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", "profile.json"), map[string]any{
+	writeJSONFileForTest(t, profileManifestPath(repoRoot, "openai"), map[string]any{
 		"name":        "openai",
 		"description": "OpenAI profile",
 	})
-	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", starterProfileConfigFile), map[string]any{
+	writeJSONFileForTest(t, starterProfileLayerPath(repoRoot, "openai"), map[string]any{
 		"model": "profile-model",
 	})
 	writeJSONFileForTest(t, filepath.Join(repoRoot, "secrets", "openai.json"), map[string]any{
@@ -761,10 +794,10 @@ func TestDeleteRejectsWhenConfirmationDoesNotMatch(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	repoRoot := filepath.Join(home, ".claude-profile")
-	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", "profile.json"), map[string]any{
+	writeJSONFileForTest(t, profileManifestPath(repoRoot, "openai"), map[string]any{
 		"name": "openai",
 	})
-	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", starterProfileConfigFile), map[string]any{
+	writeJSONFileForTest(t, starterProfileLayerPath(repoRoot, "openai"), map[string]any{
 		"model": "profile-model",
 	})
 	writeJSONFileForTest(t, filepath.Join(repoRoot, "secrets", "openai.json"), map[string]any{
@@ -778,7 +811,7 @@ func TestDeleteRejectsWhenConfirmationDoesNotMatch(t *testing.T) {
 	if !strings.Contains(err.Error(), "aborted") {
 		t.Fatalf("expected abort error, got %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(repoRoot, "profiles", "openai", "profile.json")); err != nil {
+	if _, err := os.Stat(profileManifestPath(repoRoot, "openai")); err != nil {
 		t.Fatalf("expected profile to remain after rejected delete: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(repoRoot, "secrets", "openai.json")); err != nil {
@@ -841,7 +874,7 @@ func TestEndToEndApplyStacksManualProfileFilesAndLocalSecrets(t *testing.T) {
 	}
 
 	repoRoot := filepath.Join(home, ".claude-profile")
-	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", "20-models.json"), map[string]any{
+	writeJSONFileForTest(t, profileLayerPath(repoRoot, "openai", "020-models.json"), map[string]any{
 		"model": "gpt-4.1-mini",
 		"features": map[string]any{
 			"reasoning": "high",
@@ -878,8 +911,51 @@ func TestEndToEndApplyStacksManualProfileFilesAndLocalSecrets(t *testing.T) {
 	if strings.Contains(status, "secrets/openai.json") {
 		t.Fatalf("expected local secret file to stay out of git status, got %q", status)
 	}
-	if !strings.Contains(status, "profiles/openai/20-models.json") {
+	if !strings.Contains(status, "profiles/openai/layers/020-models.json") {
 		t.Fatalf("expected manual profile file to be visible in git status, got %q", status)
+	}
+}
+
+func TestMigrateMovesLegacyProfileFilesIntoManifestAndLayers(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	repoRoot := filepath.Join(home, ".claude-profile")
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", "profile.json"), map[string]any{
+		"name":        "openai",
+		"description": "OpenAI profile",
+	})
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", "10-config.json"), map[string]any{
+		"model": "gpt-4.1",
+	})
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", "20-models.json"), map[string]any{
+		"reasoning": "high",
+	})
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "bedrock", "profile.json"), map[string]any{
+		"name": "bedrock",
+	})
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "bedrock", "10-config.json"), map[string]any{
+		"model": "claude-sonnet",
+	})
+
+	stdout, stderr, err := runCLI(t, "migrate")
+	if err != nil {
+		t.Fatalf("migrate failed: %v\nstderr=%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "migrated profile \"openai\"") || !strings.Contains(stdout, "migrated profile \"bedrock\"") {
+		t.Fatalf("expected migrated profiles in output, got %q", stdout)
+	}
+	assertFileExists(t, profileManifestPath(repoRoot, "openai"))
+	assertFileExists(t, starterProfileLayerPath(repoRoot, "openai"))
+	assertFileExists(t, profileLayerPath(repoRoot, "openai", "020-models.json"))
+	if _, err := os.Stat(filepath.Join(repoRoot, "profiles", "openai", "profile.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected legacy manifest removed, got err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "profiles", "openai", "10-config.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected legacy config removed, got err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "profiles", "openai", "20-models.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected legacy layered file removed, got err=%v", err)
 	}
 }
 
@@ -964,4 +1040,16 @@ func assertFileContent(t *testing.T, path, want string) {
 	if got != want {
 		t.Fatalf("unexpected content in %s:\nwant:\n%s\ngot:\n%s", path, want, got)
 	}
+}
+
+func profileManifestPath(repoRoot, profile string) string {
+	return filepath.Join(repoRoot, "profiles", profile, "manifest.json")
+}
+
+func profileLayerPath(repoRoot, profile, filename string) string {
+	return filepath.Join(repoRoot, "profiles", profile, "layers", filename)
+}
+
+func starterProfileLayerPath(repoRoot, profile string) string {
+	return profileLayerPath(repoRoot, profile, "010-config.json")
 }

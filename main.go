@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,10 +20,14 @@ import (
 )
 
 const (
-	gitIgnoreContent         = "secrets/\nstate/\nbackups/\n"
-	starterProfileConfigFile = "10-config.json"
-	fallbackGitUserName      = "claude-profile"
-	fallbackGitUserEmail     = "claude-profile@local"
+	gitIgnoreContent               = "secrets/\nstate/\nbackups/\n"
+	profileManifestFile            = "manifest.json"
+	legacyProfileManifestFile      = "profile.json"
+	profileLayersDirName           = "layers"
+	starterProfileConfigFile       = "010-config.json"
+	legacyStarterProfileConfigFile = "10-config.json"
+	fallbackGitUserName            = "claude-profile"
+	fallbackGitUserEmail           = "claude-profile@local"
 )
 
 var (
@@ -93,6 +98,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newApplyCmd())
 	root.AddCommand(newDeleteCmd())
 	root.AddCommand(newListCmd())
+	root.AddCommand(newMigrateCmd())
 	root.AddCommand(newCommitCmd())
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newCompletionCmd(root))
@@ -130,9 +136,10 @@ func newApplyCmd() *cobra.Command {
 	var targetPath string
 
 	cmd := &cobra.Command{
-		Use:   "apply <name>",
-		Short: "Apply a layered profile into Claude settings",
-		Args:  cobra.ExactArgs(1),
+		Use:               "apply <name>",
+		Short:             "Apply a layered profile into Claude settings",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeProfileNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			app, err := newApp()
 			if err != nil {
@@ -141,7 +148,7 @@ func newApplyCmd() *cobra.Command {
 			if targetPath == "" {
 				targetPath = filepath.Join(app.home, ".claude", "settings.json")
 			}
-			return app.applyProfile(cmd.ErrOrStderr(), args[0], targetPath)
+			return app.applyProfile(cmd.OutOrStdout(), cmd.ErrOrStderr(), args[0], targetPath)
 		},
 	}
 
@@ -151,9 +158,10 @@ func newApplyCmd() *cobra.Command {
 
 func newDeleteCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "delete <name>",
-		Short: "Delete a profile after double confirmation",
-		Args:  cobra.ExactArgs(1),
+		Use:               "delete <name>",
+		Short:             "Delete a profile after double confirmation",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeProfileNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			app, err := newApp()
 			if err != nil {
@@ -175,6 +183,21 @@ func newListCmd() *cobra.Command {
 				return err
 			}
 			return app.listProfiles(cmd.OutOrStdout())
+		},
+	}
+}
+
+func newMigrateCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "migrate",
+		Short: "Migrate legacy profile layouts into manifest/layers",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			app, err := newApp()
+			if err != nil {
+				return err
+			}
+			return app.migrateProfiles(cmd.OutOrStdout())
 		},
 	}
 }
@@ -248,6 +271,18 @@ func newApp() (*app, error) {
 	}, nil
 }
 
+func completeProfileNames(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+	app, err := newApp()
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	names, err := app.profileNames()
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	return names, cobra.ShellCompDirectiveNoFileComp
+}
+
 func (a *app) createProfile(stdin io.Reader, stdout io.Writer, name, description, sourcePath string, force bool) error {
 	if err := a.ensureRepoDirs(); err != nil {
 		return err
@@ -293,10 +328,10 @@ func (a *app) createProfile(stdin io.Reader, stdout io.Writer, name, description
 	}
 
 	meta := profileMeta{Name: name, Description: description}
-	if err := a.writeJSONFile(filepath.Join(profileDir, "profile.json"), structToMap(meta)); err != nil {
+	if err := a.writeJSONFile(a.profileManifestPath(name), structToMap(meta)); err != nil {
 		return err
 	}
-	if err := a.writeJSONFile(filepath.Join(profileDir, starterProfileConfigFile), ensureJSONObject(profileDiff)); err != nil {
+	if err := a.writeJSONFile(a.profileLayerPath(name, starterProfileConfigFile), ensureJSONObject(profileDiff)); err != nil {
 		return err
 	}
 	if err := a.writeJSONFile(secretPath, ensureJSONObject(secretDiff)); err != nil {
@@ -317,13 +352,12 @@ func (a *app) createProfile(stdin io.Reader, stdout io.Writer, name, description
 	return err
 }
 
-func (a *app) applyProfile(stderr io.Writer, name, targetPath string) error {
+func (a *app) applyProfile(stdout, stderr io.Writer, name, targetPath string) error {
 	if err := a.ensureRepoDirs(); err != nil {
 		return err
 	}
 
-	profileDir := filepath.Join(a.repoRoot, "profiles", name)
-	if _, err := os.Stat(filepath.Join(profileDir, "profile.json")); err != nil {
+	if _, err := os.Stat(a.profileManifestPath(name)); err != nil {
 		return fmt.Errorf("profile %q not found", name)
 	}
 
@@ -331,7 +365,7 @@ func (a *app) applyProfile(stderr io.Writer, name, targetPath string) error {
 	if err != nil {
 		return err
 	}
-	merged, err = a.mergeIntoExisting(merged, profileDir, map[string]struct{}{"profile.json": {}})
+	merged, err = a.mergeIntoExisting(merged, a.profileLayersDir(name), nil)
 	if err != nil {
 		return err
 	}
@@ -351,12 +385,16 @@ func (a *app) applyProfile(stderr io.Writer, name, targetPath string) error {
 	if err := a.writeAtomicJSON(targetPath, merged); err != nil {
 		return err
 	}
-	return a.writeActiveProfile(name)
+	if err := a.writeActiveProfile(name); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(stdout, "applied profile %q to %s\n", name, targetPath)
+	return err
 }
 
 func (a *app) deleteProfile(stdin io.Reader, stdout io.Writer, name string) error {
-	profileDir := filepath.Join(a.repoRoot, "profiles", name)
-	if _, err := os.Stat(filepath.Join(profileDir, "profile.json")); err != nil {
+	profileDir := a.profileDir(name)
+	if _, err := os.Stat(a.profileManifestPath(name)); err != nil {
 		return fmt.Errorf("profile %q not found", name)
 	}
 
@@ -413,20 +451,13 @@ func (a *app) listProfiles(stdout io.Writer) error {
 		if !entry.IsDir() {
 			continue
 		}
-		profileDir := filepath.Join(profilesDir, entry.Name())
-		metaMap, err := a.readJSONFile(filepath.Join(profileDir, "profile.json"))
+		metaMap, err := a.readJSONFile(a.profileManifestPath(entry.Name()))
 		if err != nil {
 			return err
 		}
-		files, err := readConfigFilenames(profileDir, false)
+		files, err := readConfigFilenames(a.profileLayersDir(entry.Name()), false)
 		if err != nil {
 			return err
-		}
-		filtered := make([]string, 0, len(files))
-		for _, file := range files {
-			if file != "profile.json" {
-				filtered = append(filtered, file)
-			}
 		}
 		secret := "no"
 		if _, err := os.Stat(filepath.Join(a.repoRoot, "secrets", entry.Name()+".json")); err == nil {
@@ -439,8 +470,8 @@ func (a *app) listProfiles(stdout io.Writer) error {
 		}
 		description, _ := metaMap["description"].(string)
 		fileList := "-"
-		if len(filtered) > 0 {
-			fileList = strings.Join(filtered, ",")
+		if len(files) > 0 {
+			fileList = strings.Join(files, ",")
 		}
 		lines = append(lines, fmt.Sprintf("%s%s | %s | files=%s | secret=%s", prefix, entry.Name(), description, fileList, secret))
 	}
@@ -450,6 +481,36 @@ func (a *app) listProfiles(stdout io.Writer) error {
 		if _, err := fmt.Fprintln(stdout, line); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (a *app) migrateProfiles(stdout io.Writer) error {
+	if err := a.ensureRepoDirs(); err != nil {
+		return err
+	}
+
+	names, err := a.allProfileDirs()
+	if err != nil {
+		return err
+	}
+
+	migrated := 0
+	for _, name := range names {
+		changed, err := a.migrateProfile(name)
+		if err != nil {
+			return err
+		}
+		if changed {
+			migrated++
+			if _, err := fmt.Fprintf(stdout, "migrated profile %q\n", name); err != nil {
+				return err
+			}
+		}
+	}
+	if migrated == 0 {
+		_, err := fmt.Fprintln(stdout, "no profiles migrated")
+		return err
 	}
 	return nil
 }
@@ -701,6 +762,97 @@ func (a *app) prepareProfileArtifacts(stdin io.Reader, stdout io.Writer, profile
 	return os.MkdirAll(profileDir, 0o755)
 }
 
+func (a *app) profileDir(name string) string {
+	return filepath.Join(a.repoRoot, "profiles", name)
+}
+
+func (a *app) profileManifestPath(name string) string {
+	return filepath.Join(a.profileDir(name), profileManifestFile)
+}
+
+func (a *app) legacyProfileManifestPath(name string) string {
+	return filepath.Join(a.profileDir(name), legacyProfileManifestFile)
+}
+
+func (a *app) profileLayersDir(name string) string {
+	return filepath.Join(a.profileDir(name), profileLayersDirName)
+}
+
+func (a *app) profileLayerPath(name, filename string) string {
+	return filepath.Join(a.profileLayersDir(name), filename)
+}
+
+func (a *app) allProfileDirs() ([]string, error) {
+	entries, err := os.ReadDir(filepath.Join(a.repoRoot, "profiles"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			names = append(names, entry.Name())
+		}
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+func (a *app) profileNames() ([]string, error) {
+	names, err := a.allProfileDirs()
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]string, 0, len(names))
+	for _, name := range names {
+		if pathExists(a.profileManifestPath(name)) {
+			filtered = append(filtered, name)
+		}
+	}
+	return filtered, nil
+}
+
+func (a *app) migrateProfile(name string) (bool, error) {
+	profileDir := a.profileDir(name)
+	changed := false
+
+	if pathExists(a.legacyProfileManifestPath(name)) && !pathExists(a.profileManifestPath(name)) {
+		if err := os.Rename(a.legacyProfileManifestPath(name), a.profileManifestPath(name)); err != nil {
+			return false, err
+		}
+		changed = true
+	}
+
+	legacyFiles, err := readConfigFilenames(profileDir, false)
+	if errors.Is(err, os.ErrNotExist) {
+		return changed, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	for _, file := range legacyFiles {
+		if file == profileManifestFile || file == legacyProfileManifestFile {
+			continue
+		}
+
+		targetName := normalizeLayerFilename(file)
+		sourcePath := filepath.Join(profileDir, file)
+		targetPath := a.profileLayerPath(name, targetName)
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+			return false, err
+		}
+		if err := os.Rename(sourcePath, targetPath); err != nil {
+			return false, err
+		}
+		changed = true
+	}
+
+	return changed, nil
+}
+
 func (a *app) mergeConfigDir(dir string, ignore map[string]struct{}) (map[string]any, error) {
 	files, err := readConfigFilenames(dir, false)
 	if errors.Is(err, os.ErrNotExist) {
@@ -878,6 +1030,21 @@ func ensureTextContains(path, marker, block string) error {
 func pathExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+func normalizeLayerFilename(name string) string {
+	if name == legacyStarterProfileConfigFile {
+		return starterProfileConfigFile
+	}
+	prefix, suffix, ok := strings.Cut(name, "-")
+	if !ok {
+		return name
+	}
+	value, err := strconv.Atoi(prefix)
+	if err != nil {
+		return name
+	}
+	return fmt.Sprintf("%03d-%s", value, suffix)
 }
 
 func confirmDelete(reader *bufio.Reader, stdout io.Writer, prompt, expected string) error {

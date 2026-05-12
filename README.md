@@ -68,8 +68,8 @@ Edit layered config files under:
 
 - Bootstraps `~/.claude-profile` as a local Git repository on first `create`
 - Splits shared Claude settings into `common/*.json`
-- Stores per-profile overrides in `profiles/<name>/*.json`
-- `create` writes the initial profile diff to `profiles/<name>/10-config.json` by default
+- Stores per-profile overrides in `profiles/<name>/layers/*.json`
+- `create` writes the initial profile diff to `profiles/<name>/layers/010-config.json` by default
 - Stores sensitive overrides in `secrets/<name>.json`, ignored by Git
 - Rebuilds `~/.claude/settings.json` from layered config with `apply`
 - Tracks the active profile in `state/active.json`
@@ -88,8 +88,9 @@ Edit layered config files under:
     90-shared.json
   profiles/
     <name>/
-      profile.json
-      10-config.json
+      manifest.json
+      layers/
+        010-config.json
   secrets/
     <name>.json
   state/
@@ -114,7 +115,7 @@ Useful flags:
 - `--source`: read from a non-default settings file
 - `--force`: overwrite an existing profile or same-name local secret after typing two confirmations
 
-`10-config.json` is only the default starter file name created by `create`. It is not part of the merge protocol. After bootstrap, you can split a profile into any number of `*.json` files such as `20-models.json` or `30-provider.json`, and `apply` will merge every `*.json` file in the profile directory except `profile.json`.
+`010-config.json` is only the default starter file name created by `create`. It is not part of the merge protocol. After bootstrap, you can split a profile into any number of `*.json` files under `layers/` such as `020-models.json` or `030-provider.json`, and `apply` will merge every `*.json` file in the profile's `layers/` directory. `manifest.json` is metadata only.
 
 ### `apply`
 
@@ -134,6 +135,14 @@ List available profiles, their description, config files, secret presence, and a
 
 ```bash
 claude-profile list
+```
+
+### `migrate`
+
+Migrate legacy profile directories from the old `profile.json` plus root-level `*.json` layout into `manifest.json` plus `layers/*.json`.
+
+```bash
+claude-profile migrate
 ```
 
 ### `delete`
@@ -157,7 +166,7 @@ If either confirmation does not match, the command aborts without changing any f
 - Arrays replace the previous value
 - Scalars are overwritten by later files
 - Files are applied in lexicographic order
-- `profile.json` is metadata only and never merged into Claude settings
+- `manifest.json` is metadata only and never merged into Claude settings
 
 ## Sensitive Fields
 
