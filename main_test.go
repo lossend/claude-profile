@@ -225,6 +225,86 @@ func TestCreateKeepsProviderEnvDefaultsInProfileOverrides(t *testing.T) {
 	}
 }
 
+func TestCreateRejectsWhenOnlySecretAlreadyExists(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	writeJSONFileForTest(t, filepath.Join(home, ".claude", "settings.json"), map[string]any{
+		"model": "claude-sonnet",
+	})
+	repoRoot := filepath.Join(home, ".claude-profile")
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "secrets", "work.json"), map[string]any{
+		"env": map[string]any{"OPENAI_API_KEY": "existing-secret"},
+	})
+
+	stdout, stderr, err := runCLI(t, "create", "work", "--description", "Work profile")
+	if err == nil {
+		t.Fatalf("expected create to fail when secret already exists\nstdout=%s\nstderr=%s", stdout, stderr)
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected duplicate error, got %v", err)
+	}
+}
+
+func TestCreateForceRequiresDoubleConfirmation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	repoRoot := filepath.Join(home, ".claude-profile")
+	writeJSONFileForTest(t, filepath.Join(home, ".claude", "settings.json"), map[string]any{
+		"model": "new-model",
+	})
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "work", "profile.json"), map[string]any{
+		"name":        "work",
+		"description": "Old work profile",
+	})
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "work", starterProfileConfigFile), map[string]any{
+		"model": "old-model",
+	})
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "secrets", "work.json"), map[string]any{
+		"env": map[string]any{"OPENAI_API_KEY": "old-secret"},
+	})
+
+	stdout, stderr, err := runCLIWithInput(t, "work\nDELETE\n", "create", "work", "--description", "New work profile", "--force")
+	if err != nil {
+		t.Fatalf("expected forced create to succeed: %v\nstdout=%s\nstderr=%s", err, stdout, stderr)
+	}
+	profileMeta := readJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "work", "profile.json"))
+	if profileMeta["description"] != "New work profile" {
+		t.Fatalf("expected profile metadata to be replaced, got %#v", profileMeta)
+	}
+}
+
+func TestCreateForceRejectsWrongConfirmation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	repoRoot := filepath.Join(home, ".claude-profile")
+	writeJSONFileForTest(t, filepath.Join(home, ".claude", "settings.json"), map[string]any{
+		"model": "new-model",
+	})
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "work", "profile.json"), map[string]any{
+		"name":        "work",
+		"description": "Old work profile",
+	})
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "work", starterProfileConfigFile), map[string]any{
+		"model": "old-model",
+	})
+
+	stdout, stderr, err := runCLIWithInput(t, "wrong\nDELETE\n", "create", "work", "--description", "New work profile", "--force")
+	if err == nil {
+		t.Fatalf("expected forced create to abort on wrong confirmation\nstdout=%s\nstderr=%s", stdout, stderr)
+	}
+	if !strings.Contains(err.Error(), "aborted") {
+		t.Fatalf("expected abort error, got %v", err)
+	}
+
+	profileMeta := readJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "work", "profile.json"))
+	if profileMeta["description"] != "Old work profile" {
+		t.Fatalf("expected original profile to remain unchanged, got %#v", profileMeta)
+	}
+}
+
 func TestApplyMergesCommonProfileAndSecretsWithBackup(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -374,7 +454,11 @@ func TestShellCompletionInstallationIsIdempotent(t *testing.T) {
 	})
 
 	for i := 0; i < 2; i++ {
-		_, stderr, err := runCLI(t, "create", "openai", "--description", "OpenAI profile", "--force")
+		stdin := ""
+		if i > 0 {
+			stdin = "openai\nDELETE\n"
+		}
+		_, stderr, err := runCLIWithInput(t, stdin, "create", "openai", "--description", "OpenAI profile", "--force")
 		if err != nil {
 			t.Fatalf("create failed on iteration %d: %v\nstderr=%s", i, err, stderr)
 		}

@@ -112,7 +112,7 @@ func newCreateCmd() *cobra.Command {
 			if sourcePath == "" {
 				sourcePath = filepath.Join(app.home, ".claude", "settings.json")
 			}
-			return app.createProfile(cmd.ErrOrStderr(), args[0], description, sourcePath, force)
+			return app.createProfile(cmd.InOrStdin(), cmd.OutOrStdout(), args[0], description, sourcePath, force)
 		},
 	}
 
@@ -221,7 +221,7 @@ func newApp() (*app, error) {
 	}, nil
 }
 
-func (a *app) createProfile(stderr io.Writer, name, description, sourcePath string, force bool) error {
+func (a *app) createProfile(stdin io.Reader, stdout io.Writer, name, description, sourcePath string, force bool) error {
 	if err := a.ensureRepoDirs(); err != nil {
 		return err
 	}
@@ -260,7 +260,8 @@ func (a *app) createProfile(stderr io.Writer, name, description, sourcePath stri
 	)
 
 	profileDir := filepath.Join(a.repoRoot, "profiles", name)
-	if err := a.prepareProfileDir(profileDir, force); err != nil {
+	secretPath := filepath.Join(a.repoRoot, "secrets", name+".json")
+	if err := a.prepareProfileArtifacts(stdin, stdout, profileDir, secretPath, force); err != nil {
 		return err
 	}
 
@@ -271,7 +272,7 @@ func (a *app) createProfile(stderr io.Writer, name, description, sourcePath stri
 	if err := a.writeJSONFile(filepath.Join(profileDir, starterProfileConfigFile), ensureJSONObject(profileDiff)); err != nil {
 		return err
 	}
-	if err := a.writeJSONFile(filepath.Join(a.repoRoot, "secrets", name+".json"), ensureJSONObject(secretDiff)); err != nil {
+	if err := a.writeJSONFile(secretPath, ensureJSONObject(secretDiff)); err != nil {
 		return err
 	}
 	return a.writeActiveProfile(name)
@@ -561,6 +562,34 @@ func (a *app) prepareProfileDir(profileDir string, force bool) error {
 	return os.MkdirAll(profileDir, 0o755)
 }
 
+func (a *app) prepareProfileArtifacts(stdin io.Reader, stdout io.Writer, profileDir, secretPath string, force bool) error {
+	profileExists := pathExists(profileDir)
+	secretExists := pathExists(secretPath)
+	if !profileExists && !secretExists {
+		return os.MkdirAll(profileDir, 0o755)
+	}
+
+	name := filepath.Base(profileDir)
+	if !force {
+		return fmt.Errorf("profile %q already exists; use --force to overwrite", name)
+	}
+
+	reader := bufio.NewReader(stdin)
+	if err := confirmDelete(reader, stdout, fmt.Sprintf("Type the profile name (%s) to overwrite it: ", name), name); err != nil {
+		return err
+	}
+	if err := confirmDelete(reader, stdout, "Type DELETE to permanently overwrite this profile: ", "DELETE"); err != nil {
+		return err
+	}
+
+	if profileExists {
+		if err := os.RemoveAll(profileDir); err != nil {
+			return err
+		}
+	}
+	return os.MkdirAll(profileDir, 0o755)
+}
+
 func (a *app) mergeConfigDir(dir string, ignore map[string]struct{}) (map[string]any, error) {
 	files, err := readConfigFilenames(dir, false)
 	if errors.Is(err, os.ErrNotExist) {
@@ -733,6 +762,11 @@ func ensureTextContains(path, marker, block string) error {
 	}
 	content += block
 	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func confirmDelete(reader *bufio.Reader, stdout io.Writer, prompt, expected string) error {
