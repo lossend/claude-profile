@@ -65,6 +65,7 @@ claude-profile apply openai
 - Bootstraps `~/.claude-profile` as a local Git repository on first `create`
 - Splits shared Claude settings into `common/*.json`
 - Stores per-profile overrides in `profiles/<name>/*.json`
+- `create` writes the initial profile diff to `profiles/<name>/10-config.json` by default
 - Stores sensitive overrides in `secrets/<name>.json`, ignored by Git
 - Rebuilds `~/.claude/settings.json` from layered config with `apply`
 - Tracks the active profile in `state/active.json`
@@ -108,6 +109,8 @@ Useful flags:
 - `--description`: store profile metadata
 - `--source`: read from a non-default settings file
 - `--force`: overwrite an existing profile directory
+
+`10-config.json` is only the default starter file name created by `create`. It is not part of the merge protocol. After bootstrap, you can split a profile into any number of `*.json` files such as `20-models.json` or `30-provider.json`, and `apply` will merge every `*.json` file in the profile directory except `profile.json`.
 
 ### `apply`
 

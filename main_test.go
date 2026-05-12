@@ -74,7 +74,7 @@ func TestCreateBootstrapsProfileRepo(t *testing.T) {
 		t.Fatalf("did not expect sensitive key in shared config: %#v", commonShared)
 	}
 
-	profileConfig := readJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", "10-config.json"))
+	profileConfig := readJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", starterProfileConfigFile))
 	if len(profileConfig) != 0 {
 		t.Fatalf("expected empty profile diff for first profile, got %#v", profileConfig)
 	}
@@ -142,7 +142,7 @@ func TestCreateDerivesProfileDiffAgainstExistingCommon(t *testing.T) {
 		t.Fatalf("create failed: %v\nstderr=%s", err, stderr)
 	}
 
-	profileConfig := readJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "bedrock", "10-config.json"))
+	profileConfig := readJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "bedrock", starterProfileConfigFile))
 	if profileConfig["model"] != "profile-model" {
 		t.Fatalf("expected model diff in profile config: %#v", profileConfig)
 	}
@@ -182,7 +182,7 @@ func TestApplyMergesCommonProfileAndSecretsWithBackup(t *testing.T) {
 		"name":        "openai",
 		"description": "OpenAI profile",
 	})
-	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", "10-config.json"), map[string]any{
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", starterProfileConfigFile), map[string]any{
 		"nested": map[string]any{
 			"level": "profile",
 		},
@@ -248,7 +248,7 @@ func TestApplyWarnsWhenSecretFileMissing(t *testing.T) {
 	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", "profile.json"), map[string]any{
 		"name": "openai",
 	})
-	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", "10-config.json"), map[string]any{
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", starterProfileConfigFile), map[string]any{
 		"model": "profile-model",
 	})
 
@@ -270,7 +270,7 @@ func TestListShowsProfilesFilesSecretsAndActiveMarker(t *testing.T) {
 		"name":        "openai",
 		"description": "OpenAI profile",
 	})
-	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", "10-config.json"), map[string]any{
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", starterProfileConfigFile), map[string]any{
 		"model": "gpt-4.1",
 	})
 	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "openai", "20-models.json"), map[string]any{
@@ -283,7 +283,7 @@ func TestListShowsProfilesFilesSecretsAndActiveMarker(t *testing.T) {
 		"name":        "bedrock",
 		"description": "Bedrock profile",
 	})
-	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "bedrock", "10-config.json"), map[string]any{
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "profiles", "bedrock", starterProfileConfigFile), map[string]any{
 		"model": "claude-sonnet",
 	})
 	writeJSONFileForTest(t, filepath.Join(repoRoot, "state", "active.json"), map[string]any{
@@ -297,7 +297,7 @@ func TestListShowsProfilesFilesSecretsAndActiveMarker(t *testing.T) {
 	if !strings.Contains(stdout, "* openai") {
 		t.Fatalf("expected active profile marker in output: %q", stdout)
 	}
-	if !strings.Contains(stdout, "files=10-config.json,20-models.json") {
+	if !strings.Contains(stdout, "files="+starterProfileConfigFile+",20-models.json") {
 		t.Fatalf("expected config file names in output: %q", stdout)
 	}
 	if !strings.Contains(stdout, "secret=yes") || !strings.Contains(stdout, "secret=no") {

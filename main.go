@@ -17,7 +17,8 @@ import (
 )
 
 const (
-	gitIgnoreContent = "secrets/\nstate/\nbackups/\n"
+	gitIgnoreContent         = "secrets/\nstate/\nbackups/\n"
+	starterProfileConfigFile = "10-config.json"
 )
 
 var (
@@ -235,7 +236,7 @@ func (a *app) createProfile(stderr io.Writer, name, description, sourcePath stri
 	if err := a.writeJSONFile(filepath.Join(profileDir, "profile.json"), structToMap(meta)); err != nil {
 		return err
 	}
-	if err := a.writeJSONFile(filepath.Join(profileDir, "10-config.json"), ensureJSONObject(profileDiff)); err != nil {
+	if err := a.writeJSONFile(filepath.Join(profileDir, starterProfileConfigFile), ensureJSONObject(profileDiff)); err != nil {
 		return err
 	}
 	if err := a.writeJSONFile(filepath.Join(a.repoRoot, "secrets", name+".json"), ensureJSONObject(secretDiff)); err != nil {
