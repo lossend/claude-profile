@@ -52,6 +52,12 @@ Apply a profile back into Claude:
 claude-profile apply work
 ```
 
+Rename a profile:
+
+```bash
+claude-profile rename work office
+```
+
 Delete a profile when you no longer need it:
 
 ```bash
@@ -159,6 +165,16 @@ claude-profile delete work
 - then type `DELETE`
 
 If either confirmation does not match, the command aborts without changing any files.
+
+### `rename`
+
+Rename an existing profile directory, its secret file, and the active profile state if applicable.
+
+```bash
+claude-profile rename work office
+```
+
+The new name must not already exist. If another rename is in progress the command exits immediately with an error.
 
 ## Merge Rules
 
