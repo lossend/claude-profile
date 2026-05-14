@@ -959,6 +959,184 @@ func TestMigrateMovesLegacyProfileFilesIntoManifestAndLayers(t *testing.T) {
 	}
 }
 
+func TestRenameMovesProfileDirAndUpdatesManifest(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	repoRoot := filepath.Join(home, ".claude-profile")
+	writeJSONFileForTest(t, profileManifestPath(repoRoot, "openai"), map[string]any{
+		"name":        "openai",
+		"description": "OpenAI profile",
+	})
+	writeJSONFileForTest(t, starterProfileLayerPath(repoRoot, "openai"), map[string]any{
+		"model": "gpt-4",
+	})
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "secrets", "openai.json"), map[string]any{
+		"env": map[string]any{"OPENAI_API_KEY": "sk-test"},
+	})
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "state", "active.json"), map[string]any{
+		"name": "openai",
+	})
+
+	stdout, stderr, err := runCLI(t, "rename", "openai", "gpt")
+	if err != nil {
+		t.Fatalf("rename failed: %v\nstderr=%s", err, stderr)
+	}
+	if !strings.Contains(stdout, `renamed profile "openai" to "gpt"`) {
+		t.Fatalf("unexpected output: %q", stdout)
+	}
+
+	if _, err := os.Stat(filepath.Join(repoRoot, "profiles", "openai")); !os.IsNotExist(err) {
+		t.Fatalf("expected old profile dir to be gone")
+	}
+	assertFileExists(t, profileManifestPath(repoRoot, "gpt"))
+	assertFileExists(t, starterProfileLayerPath(repoRoot, "gpt"))
+
+	meta := readJSONFileForTest(t, profileManifestPath(repoRoot, "gpt"))
+	if meta["name"] != "gpt" {
+		t.Fatalf("expected manifest name updated to gpt, got %#v", meta)
+	}
+	if meta["description"] != "OpenAI profile" {
+		t.Fatalf("expected description preserved, got %#v", meta)
+	}
+
+	if _, err := os.Stat(filepath.Join(repoRoot, "secrets", "openai.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected old secret file to be gone")
+	}
+	assertFileExists(t, filepath.Join(repoRoot, "secrets", "gpt.json"))
+
+	active := readJSONFileForTest(t, filepath.Join(repoRoot, "state", "active.json"))
+	if active["name"] != "gpt" {
+		t.Fatalf("expected active profile updated to gpt, got %#v", active)
+	}
+}
+
+func TestRenameWorksWhenNoSecretExists(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	repoRoot := filepath.Join(home, ".claude-profile")
+	writeJSONFileForTest(t, profileManifestPath(repoRoot, "work"), map[string]any{
+		"name":        "work",
+		"description": "Work profile",
+	})
+	writeJSONFileForTest(t, starterProfileLayerPath(repoRoot, "work"), map[string]any{
+		"model": "claude-sonnet",
+	})
+
+	_, _, err := runCLI(t, "rename", "work", "office")
+	if err != nil {
+		t.Fatalf("rename failed: %v", err)
+	}
+
+	assertFileExists(t, profileManifestPath(repoRoot, "office"))
+	if _, err := os.Stat(filepath.Join(repoRoot, "secrets", "office.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected no secret file created when original had none")
+	}
+}
+
+func TestRenameDoesNotUpdateActiveWhenRenamedProfileIsNotActive(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	repoRoot := filepath.Join(home, ".claude-profile")
+	writeJSONFileForTest(t, profileManifestPath(repoRoot, "work"), map[string]any{
+		"name":        "work",
+		"description": "Work profile",
+	})
+	writeJSONFileForTest(t, starterProfileLayerPath(repoRoot, "work"), map[string]any{})
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "state", "active.json"), map[string]any{
+		"name": "personal",
+	})
+
+	_, _, err := runCLI(t, "rename", "work", "office")
+	if err != nil {
+		t.Fatalf("rename failed: %v", err)
+	}
+
+	active := readJSONFileForTest(t, filepath.Join(repoRoot, "state", "active.json"))
+	if active["name"] != "personal" {
+		t.Fatalf("expected active profile to remain personal, got %#v", active)
+	}
+}
+
+func TestRenameRejectsWhenNewNameAlreadyExists(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	repoRoot := filepath.Join(home, ".claude-profile")
+	writeJSONFileForTest(t, profileManifestPath(repoRoot, "openai"), map[string]any{
+		"name": "openai",
+	})
+	writeJSONFileForTest(t, starterProfileLayerPath(repoRoot, "openai"), map[string]any{})
+	writeJSONFileForTest(t, profileManifestPath(repoRoot, "gpt"), map[string]any{
+		"name": "gpt",
+	})
+	writeJSONFileForTest(t, starterProfileLayerPath(repoRoot, "gpt"), map[string]any{})
+
+	stdout, stderr, err := runCLI(t, "rename", "openai", "gpt")
+	if err == nil {
+		t.Fatalf("expected rename to fail when new name exists\nstdout=%s\nstderr=%s", stdout, stderr)
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected 'already exists' error, got %v", err)
+	}
+	assertFileExists(t, profileManifestPath(repoRoot, "openai"))
+}
+
+func TestRenameRejectsNonExistentProfile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	stdout, stderr, err := runCLI(t, "rename", "ghost", "phantom")
+	if err == nil {
+		t.Fatalf("expected rename to fail for missing profile\nstdout=%s\nstderr=%s", stdout, stderr)
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected 'not found' error, got %v", err)
+	}
+}
+
+func TestRenameRejectsSameSourceAndTarget(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	stdout, stderr, err := runCLI(t, "rename", "openai", "openai")
+	if err == nil {
+		t.Fatalf("expected rename to fail when old == new\nstdout=%s\nstderr=%s", stdout, stderr)
+	}
+	if !strings.Contains(err.Error(), "same as current name") {
+		t.Fatalf("expected same-name error, got %v", err)
+	}
+}
+
+func TestRenameBlockedByActiveLock(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	repoRoot := filepath.Join(home, ".claude-profile")
+	if err := os.MkdirAll(filepath.Join(repoRoot, "state"), 0o755); err != nil {
+		t.Fatalf("mkdir failed: %v", err)
+	}
+	lockPath := filepath.Join(repoRoot, "state", "rename.lock")
+	if err := os.WriteFile(lockPath, []byte("99999"), 0o644); err != nil {
+		t.Fatalf("write lock failed: %v", err)
+	}
+
+	writeJSONFileForTest(t, profileManifestPath(repoRoot, "openai"), map[string]any{
+		"name": "openai",
+	})
+	writeJSONFileForTest(t, starterProfileLayerPath(repoRoot, "openai"), map[string]any{})
+
+	stdout, stderr, err := runCLI(t, "rename", "openai", "gpt")
+	if err == nil {
+		t.Fatalf("expected rename to fail when lock held\nstdout=%s\nstderr=%s", stdout, stderr)
+	}
+	if !strings.Contains(err.Error(), "in progress") {
+		t.Fatalf("expected lock-in-progress error, got %v", err)
+	}
+}
+
 func runCLI(t *testing.T, args ...string) (string, string, error) {
 	t.Helper()
 

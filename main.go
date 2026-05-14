@@ -97,6 +97,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newCreateCmd())
 	root.AddCommand(newApplyCmd())
 	root.AddCommand(newDeleteCmd())
+	root.AddCommand(newRenameCmd())
 	root.AddCommand(newListCmd())
 	root.AddCommand(newMigrateCmd())
 	root.AddCommand(newCommitCmd())
@@ -168,6 +169,22 @@ func newDeleteCmd() *cobra.Command {
 				return err
 			}
 			return app.deleteProfile(cmd.InOrStdin(), cmd.OutOrStdout(), args[0])
+		},
+	}
+}
+
+func newRenameCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:               "rename <old-name> <new-name>",
+		Short:             "Rename an existing profile",
+		Args:              cobra.ExactArgs(2),
+		ValidArgsFunction: completeProfileNames,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			app, err := newApp()
+			if err != nil {
+				return err
+			}
+			return app.renameProfile(cmd.OutOrStdout(), args[0], args[1])
 		},
 	}
 }
@@ -427,6 +444,84 @@ func (a *app) deleteProfile(stdin io.Reader, stdout io.Writer, name string) erro
 
 	_, err := fmt.Fprintf(stdout, "deleted profile %q\n", name)
 	return err
+}
+
+func (a *app) renameProfile(stdout io.Writer, oldName, newName string) error {
+	if oldName == newName {
+		return fmt.Errorf("new name is the same as current name")
+	}
+
+	lockPath := filepath.Join(a.repoRoot, "state", "rename.lock")
+	if err := a.ensureRepoDirs(); err != nil {
+		return err
+	}
+	lock, err := acquireLock(lockPath)
+	if err != nil {
+		return err
+	}
+	defer releaseLock(lock, lockPath)
+
+	if _, err := os.Stat(a.profileManifestPath(oldName)); err != nil {
+		return fmt.Errorf("profile %q not found", oldName)
+	}
+	if pathExists(a.profileDir(newName)) {
+		return fmt.Errorf("profile %q already exists", newName)
+	}
+
+	oldProfileDir := a.profileDir(oldName)
+	newProfileDir := a.profileDir(newName)
+	if err := os.Rename(oldProfileDir, newProfileDir); err != nil {
+		return fmt.Errorf("rename profile directory: %w", err)
+	}
+
+	manifestPath := a.profileManifestPath(newName)
+	meta, err := a.readJSONFile(manifestPath)
+	if err != nil {
+		return fmt.Errorf("read manifest: %w", err)
+	}
+	meta["name"] = newName
+	if err := a.writeJSONFile(manifestPath, meta); err != nil {
+		return fmt.Errorf("update manifest: %w", err)
+	}
+
+	oldSecretPath := filepath.Join(a.repoRoot, "secrets", oldName+".json")
+	newSecretPath := filepath.Join(a.repoRoot, "secrets", newName+".json")
+	if pathExists(oldSecretPath) {
+		if err := os.Rename(oldSecretPath, newSecretPath); err != nil {
+			return fmt.Errorf("rename secret file: %w", err)
+		}
+	}
+
+	activePath := filepath.Join(a.repoRoot, "state", "active.json")
+	if active, err := a.readOptionalJSONFile(activePath); err != nil {
+		return err
+	} else if active != nil {
+		if activeName, ok := active["name"].(string); ok && activeName == oldName {
+			if err := a.writeActiveProfile(newName); err != nil {
+				return fmt.Errorf("update active state: %w", err)
+			}
+		}
+	}
+
+	_, err = fmt.Fprintf(stdout, "renamed profile %q to %q\n", oldName, newName)
+	return err
+}
+
+func acquireLock(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return nil, fmt.Errorf("another rename operation is in progress; try again later")
+		}
+		return nil, fmt.Errorf("acquire lock: %w", err)
+	}
+	fmt.Fprintf(f, "%d", os.Getpid())
+	return f, nil
+}
+
+func releaseLock(f *os.File, path string) {
+	f.Close()
+	os.Remove(path)
 }
 
 func (a *app) listProfiles(stdout io.Writer) error {
