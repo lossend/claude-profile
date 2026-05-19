@@ -1611,6 +1611,9 @@ func writeDiffHuman(w io.Writer, sourcePath, profileName string, entries []diffE
 		colorRed, removed, colorReset,
 		colorCyan, modified, colorReset)
 
+	// Auto-enable verbose mode if there are only a few changes
+	autoVerbose := verbose || len(entries) <= 3
+
 	for _, e := range entries {
 		fmt.Fprintf(w, "  %s%s%s:\n", colorCyan, e.Path, colorReset)
 
@@ -1619,13 +1622,13 @@ func writeDiffHuman(w io.Writer, sourcePath, profileName string, entries []diffE
 
 		switch e.Kind {
 		case "added":
-			fmt.Fprintf(w, "    %s+ profile: %s%s\n", colorGreen, formatValueWithMaskAndVerbose(e.ProfileValue, isSensitive, verbose), colorReset)
+			fmt.Fprintf(w, "    %s+ profile: %s%s\n", colorGreen, formatValueWithMaskAndVerbose(e.ProfileValue, isSensitive, autoVerbose), colorReset)
 		case "removed":
-			fmt.Fprintf(w, "    %s- current: %s%s\n", colorRed, formatValueWithMaskAndVerbose(e.CurrentValue, isSensitive, verbose), colorReset)
+			fmt.Fprintf(w, "    %s- current: %s%s\n", colorRed, formatValueWithMaskAndVerbose(e.CurrentValue, isSensitive, autoVerbose), colorReset)
 			fmt.Fprintf(w, "    %s  (not in profile)%s\n", colorRed, colorReset)
 		case "modified":
-			fmt.Fprintf(w, "    %s- current: %s%s\n", colorRed, formatValueWithMaskAndVerbose(e.CurrentValue, isSensitive, verbose), colorReset)
-			fmt.Fprintf(w, "    %s+ profile: %s%s\n", colorGreen, formatValueWithMaskAndVerbose(e.ProfileValue, isSensitive, verbose), colorReset)
+			fmt.Fprintf(w, "    %s- current: %s%s\n", colorRed, formatValueWithMaskAndVerbose(e.CurrentValue, isSensitive, autoVerbose), colorReset)
+			fmt.Fprintf(w, "    %s+ profile: %s%s\n", colorGreen, formatValueWithMaskAndVerbose(e.ProfileValue, isSensitive, autoVerbose), colorReset)
 		}
 		fmt.Fprintln(w)
 	}

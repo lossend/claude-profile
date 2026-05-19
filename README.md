@@ -183,17 +183,13 @@ Diff: ~/.claude/settings.json ↔ profile "work"
     + profile: sk-98...3def
 ```
 
-For complex values (arrays/objects), the default output shows size information:
+For complex values (arrays/objects), the output adapts based on the number of changes:
+
+- **1-3 changes**: Automatically shows full formatted JSON (easy to review)
+- **4+ changes**: Shows size summary to keep output manageable
 
 ```
-  hooks.PostToolUse:
-    - current: <444 chars, 1 lines> [{"hooks":[{"command":"~/.claude/hooks/...
-    + profile: <594 chars, 1 lines> [{"hooks":[{"command":"~/.claude/hooks/...
-```
-
-Use `--verbose` or `-v` to see full formatted JSON for complex values:
-
-```
+# With 1-3 changes, full JSON is shown automatically
   hooks.PostToolUse:
     - current: 
       [
@@ -211,7 +207,14 @@ Use `--verbose` or `-v` to see full formatted JSON for complex values:
         },
         ...
       ]
+
+# With many changes, size summary is shown
+  hooks.PostToolUse:
+    - current: <444 chars, 1 lines> [{"hooks":[{"command":"~/.claude/hooks/...
+    + profile: <594 chars, 1 lines> [{"hooks":[{"command":"~/.claude/hooks/...
 ```
+
+Use `--verbose` or `-v` to always show full formatted JSON regardless of change count.
 
 The summary line shows the total number of changes and breaks them down by type (added, removed, modified) with color coding.
 
