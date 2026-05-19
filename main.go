@@ -1565,19 +1565,61 @@ func writeDiffHuman(w io.Writer, sourcePath, profileName string, entries []diffE
 
 	for _, e := range entries {
 		fmt.Fprintf(w, "  %s%s%s:\n", colorCyan, e.Path, colorReset)
+
+		// Check if this is a sensitive field based on the path
+		isSensitive := isSensitiveKeyPath(e.Path)
+
 		switch e.Kind {
 		case "added":
-			fmt.Fprintf(w, "    %s+ profile: %s%s\n", colorGreen, formatValue(e.ProfileValue), colorReset)
+			fmt.Fprintf(w, "    %s+ profile: %s%s\n", colorGreen, formatValueWithMask(e.ProfileValue, isSensitive), colorReset)
 		case "removed":
-			fmt.Fprintf(w, "    %s- current: %s%s\n", colorRed, formatValue(e.CurrentValue), colorReset)
+			fmt.Fprintf(w, "    %s- current: %s%s\n", colorRed, formatValueWithMask(e.CurrentValue, isSensitive), colorReset)
 			fmt.Fprintf(w, "    %s  (not in profile)%s\n", colorRed, colorReset)
 		case "modified":
-			fmt.Fprintf(w, "    %s- current: %s%s\n", colorRed, formatValue(e.CurrentValue), colorReset)
-			fmt.Fprintf(w, "    %s+ profile: %s%s\n", colorGreen, formatValue(e.ProfileValue), colorReset)
+			fmt.Fprintf(w, "    %s- current: %s%s\n", colorRed, formatValueWithMask(e.CurrentValue, isSensitive), colorReset)
+			fmt.Fprintf(w, "    %s+ profile: %s%s\n", colorGreen, formatValueWithMask(e.ProfileValue, isSensitive), colorReset)
 		}
 		fmt.Fprintln(w)
 	}
 	return nil
+}
+
+func isSensitiveKeyPath(path string) bool {
+	// Check the last segment of the path (e.g., "env.ANTHROPIC_AUTH_TOKEN" -> "ANTHROPIC_AUTH_TOKEN")
+	parts := strings.Split(path, ".")
+	if len(parts) == 0 {
+		return false
+	}
+	lastKey := parts[len(parts)-1]
+	return isSensitiveKey(lastKey)
+}
+
+func formatValueWithMask(v any, maskSensitive bool) string {
+	if v == nil {
+		return "<absent>"
+	}
+
+	// If it's a sensitive value, mask it
+	if maskSensitive {
+		strVal, ok := v.(string)
+		if ok && len(strVal) > 0 {
+			return maskSensitiveValue(strVal)
+		}
+	}
+
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	return string(raw)
+}
+
+func maskSensitiveValue(value string) string {
+	if len(value) <= 8 {
+		return "***"
+	}
+	// Show first 4 and last 4 characters, mask the middle
+	return fmt.Sprintf("%s...%s", value[:4], value[len(value)-4:])
 }
 
 func formatValue(v any) string {

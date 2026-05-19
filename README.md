@@ -153,6 +153,7 @@ Shows a colored diff with:
 - **Green** (`+ profile:`): keys/values that would be added
 - **Red** (`- current:`): keys/values that would be removed
 - **Modified**: keys with different values in current vs profile
+- **Sensitive fields**: automatically masked (shows first 4 and last 4 characters only)
 
 Useful flags:
 
@@ -170,7 +171,13 @@ Diff: ~/.claude/settings.json ↔ profile "work"
 
   env.DEBUG:
     + profile: "true"
+
+  env.API_KEY:
+    - current: sk-12...f8ab
+    + profile: sk-98...3def
 ```
+
+Sensitive fields (containing TOKEN, PASSWORD, SECRET, or ending with _KEY) are automatically masked to protect credentials.
 
 Use `diff` before `apply` to preview what would change without modifying your settings.
 

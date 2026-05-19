@@ -1488,7 +1488,7 @@ func TestDiffIncludesSecretLayerInMerge(t *testing.T) {
 	envMap["API_KEY"] = "new-secret"
 	writeJSONFileForTest(t, secretPath, secrets)
 
-	// Diff should show secret difference
+	// Diff should show secret difference (masked)
 	stdout, _, err := runCLI(t, "diff", "test")
 	if err != nil {
 		t.Fatalf("diff failed: %v", err)
@@ -1496,8 +1496,9 @@ func TestDiffIncludesSecretLayerInMerge(t *testing.T) {
 	if !strings.Contains(stdout, "env.API_KEY") {
 		t.Errorf("expected env.API_KEY in output, got: %s", stdout)
 	}
-	if !strings.Contains(stdout, "new-secret") {
-		t.Errorf("expected new-secret in output, got: %s", stdout)
+	// Check for masked values (API_KEY is sensitive, should be masked)
+	if !strings.Contains(stdout, "...") {
+		t.Errorf("expected masked value (...) in output, got: %s", stdout)
 	}
 }
 
