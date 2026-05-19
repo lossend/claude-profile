@@ -46,6 +46,12 @@ Inspect available profiles:
 claude-profile list
 ```
 
+Preview what would change before applying a profile:
+
+```bash
+claude-profile diff work
+```
+
 Apply a profile back into Claude:
 
 ```bash
@@ -134,6 +140,39 @@ claude-profile apply work
 Useful flags:
 
 - `--target`: write to a non-default settings file
+
+### `diff`
+
+Compare the current Claude settings against what a profile would produce when applied.
+
+```bash
+claude-profile diff work
+```
+
+Shows a colored diff with:
+- **Green** (`+ profile:`): keys/values that would be added
+- **Red** (`- current:`): keys/values that would be removed
+- **Modified**: keys with different values in current vs profile
+
+Useful flags:
+
+- `--source`: compare against a non-default settings file
+- `--json`: output structured JSON instead of colored terminal output
+
+Example output:
+
+```
+Diff: ~/.claude/settings.json ↔ profile "work"
+
+  model:
+    - current: "claude-sonnet-4-20250514"
+    + profile: "claude-opus-4-20250514"
+
+  env.DEBUG:
+    + profile: "true"
+```
+
+Use `diff` before `apply` to preview what would change without modifying your settings.
 
 ### `list`
 

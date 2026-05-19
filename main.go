@@ -96,6 +96,7 @@ func newRootCmd() *cobra.Command {
 
 	root.AddCommand(newCreateCmd())
 	root.AddCommand(newApplyCmd())
+	root.AddCommand(newDiffCmd())
 	root.AddCommand(newDeleteCmd())
 	root.AddCommand(newRenameCmd())
 	root.AddCommand(newListCmd())
@@ -154,6 +155,32 @@ func newApplyCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&targetPath, "target", "", "Target Claude settings path")
+	return cmd
+}
+
+func newDiffCmd() *cobra.Command {
+	var sourcePath string
+	var jsonOutput bool
+
+	cmd := &cobra.Command{
+		Use:               "diff <name>",
+		Short:             "Compare current settings against a profile",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeProfileNames,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			app, err := newApp()
+			if err != nil {
+				return err
+			}
+			if sourcePath == "" {
+				sourcePath = filepath.Join(app.home, ".claude", "settings.json")
+			}
+			return app.diffProfile(cmd.OutOrStdout(), args[0], sourcePath, jsonOutput)
+		},
+	}
+
+	cmd.Flags().StringVar(&sourcePath, "source", "", "Source Claude settings path (default: ~/.claude/settings.json)")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output diff as JSON")
 	return cmd
 }
 
@@ -1374,4 +1401,225 @@ func structMap(input any) map[string]any {
 	var out map[string]any
 	_ = json.Unmarshal(raw, &out)
 	return out
+}
+
+// Diff command types and functions
+
+const (
+	colorRed   = "\033[31m"
+	colorGreen = "\033[32m"
+	colorCyan  = "\033[36m"
+	colorReset = "\033[0m"
+)
+
+type diffEntry struct {
+	Path         string
+	CurrentValue any
+	ProfileValue any
+	Kind         string // "added", "removed", "modified"
+}
+
+func (a *app) diffProfile(stdout io.Writer, name, sourcePath string, jsonOutput bool) error {
+	// 1. Verify profile exists
+	if _, err := os.Stat(a.profileManifestPath(name)); err != nil {
+		return fmt.Errorf("profile %q not found", name)
+	}
+
+	// 2. Build merged profile (same as applyProfile, but without ensureRepoDirs)
+	merged, err := a.mergeIntoExisting(map[string]any{}, filepath.Join(a.repoRoot, "common"), nil)
+	if err != nil {
+		return err
+	}
+	merged, err = a.mergeIntoExisting(merged, a.profileLayersDir(name), nil)
+	if err != nil {
+		return err
+	}
+
+	// 3. Merge secrets (silently skip if missing)
+	secretPath := filepath.Join(a.repoRoot, "secrets", name+".json")
+	if secretConfig, err := a.readOptionalJSONFile(secretPath); err != nil {
+		return err
+	} else if secretConfig != nil {
+		merged = mergeMaps(merged, secretConfig)
+	}
+
+	// 4. Read current settings (treat missing as empty map)
+	current, err := a.readJSONFile(sourcePath)
+	if errors.Is(err, os.ErrNotExist) {
+		current = map[string]any{}
+	} else if err != nil {
+		return fmt.Errorf("read source settings: %w", err)
+	}
+
+	// 5. Compute symmetric diff
+	entries := computeDiffEntries(current, merged, "")
+
+	// 6. Output
+	if jsonOutput {
+		return writeDiffJSON(stdout, sourcePath, name, entries)
+	}
+	return writeDiffHuman(stdout, sourcePath, name, entries)
+}
+
+func computeDiffEntries(current, profile map[string]any, prefix string) []diffEntry {
+	var entries []diffEntry
+	allKeys := mergedKeySet(current, profile)
+
+	for _, key := range allKeys {
+		path := joinPath(prefix, key)
+		curVal, curOK := current[key]
+		profVal, profOK := profile[key]
+
+		if !curOK {
+			// Key only in profile = addition
+			entries = append(entries, flattenValue(path, nil, profVal, "added")...)
+			continue
+		}
+		if !profOK {
+			// Key only in current = removal
+			entries = append(entries, flattenValue(path, curVal, nil, "removed")...)
+			continue
+		}
+
+		// Both exist — recurse if both are maps
+		curMap, curIsMap := asMap(curVal)
+		profMap, profIsMap := asMap(profVal)
+		if curIsMap && profIsMap {
+			entries = append(entries, computeDiffEntries(curMap, profMap, path)...)
+			continue
+		}
+
+		// Compare values (handles type mismatches, arrays, scalars)
+		if !reflect.DeepEqual(curVal, profVal) {
+			entries = append(entries, diffEntry{
+				Path:         path,
+				CurrentValue: curVal,
+				ProfileValue: profVal,
+				Kind:         "modified",
+			})
+		}
+	}
+	return entries
+}
+
+func flattenValue(path string, curVal, profVal any, kind string) []diffEntry {
+	// For added maps, recurse to show each leaf
+	if m, ok := profVal.(map[string]any); ok && kind == "added" {
+		var entries []diffEntry
+		for _, key := range sortedKeys(m) {
+			entries = append(entries, flattenValue(joinPath(path, key), nil, m[key], kind)...)
+		}
+		return entries
+	}
+	// For removed maps, recurse to show each leaf
+	if m, ok := curVal.(map[string]any); ok && kind == "removed" {
+		var entries []diffEntry
+		for _, key := range sortedKeys(m) {
+			entries = append(entries, flattenValue(joinPath(path, key), m[key], nil, kind)...)
+		}
+		return entries
+	}
+	// Scalar or array value
+	return []diffEntry{{Path: path, CurrentValue: curVal, ProfileValue: profVal, Kind: kind}}
+}
+
+func joinPath(prefix, key string) string {
+	if prefix == "" {
+		return key
+	}
+	return prefix + "." + key
+}
+
+func mergedKeySet(a, b map[string]any) []string {
+	seen := map[string]struct{}{}
+	for k := range a {
+		seen[k] = struct{}{}
+	}
+	for k := range b {
+		seen[k] = struct{}{}
+	}
+	keys := make([]string, 0, len(seen))
+	for k := range seen {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func sortedKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func writeDiffHuman(w io.Writer, sourcePath, profileName string, entries []diffEntry) error {
+	if len(entries) == 0 {
+		_, err := fmt.Fprintf(w, "No differences: %s matches profile %q\n", sourcePath, profileName)
+		return err
+	}
+
+	fmt.Fprintf(w, "Diff: %s ↔ profile %q\n\n", sourcePath, profileName)
+
+	for _, e := range entries {
+		fmt.Fprintf(w, "  %s%s%s:\n", colorCyan, e.Path, colorReset)
+		switch e.Kind {
+		case "added":
+			fmt.Fprintf(w, "    %s+ profile: %s%s\n", colorGreen, formatValue(e.ProfileValue), colorReset)
+		case "removed":
+			fmt.Fprintf(w, "    %s- current: %s%s\n", colorRed, formatValue(e.CurrentValue), colorReset)
+			fmt.Fprintf(w, "    %s  (not in profile)%s\n", colorRed, colorReset)
+		case "modified":
+			fmt.Fprintf(w, "    %s- current: %s%s\n", colorRed, formatValue(e.CurrentValue), colorReset)
+			fmt.Fprintf(w, "    %s+ profile: %s%s\n", colorGreen, formatValue(e.ProfileValue), colorReset)
+		}
+		fmt.Fprintln(w)
+	}
+	return nil
+}
+
+func formatValue(v any) string {
+	if v == nil {
+		return "<absent>"
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	return string(raw)
+}
+
+type jsonDiffOutput struct {
+	Source  string          `json:"source"`
+	Profile string          `json:"profile"`
+	Entries []jsonDiffEntry `json:"entries"`
+}
+
+type jsonDiffEntry struct {
+	Path    string `json:"path"`
+	Kind    string `json:"kind"`
+	Current any    `json:"current,omitempty"`
+	Profile any    `json:"profile,omitempty"`
+}
+
+func writeDiffJSON(w io.Writer, sourcePath, profileName string, entries []diffEntry) error {
+	jsonEntries := make([]jsonDiffEntry, len(entries))
+	for i, e := range entries {
+		jsonEntries[i] = jsonDiffEntry{
+			Path:    e.Path,
+			Kind:    e.Kind,
+			Current: e.CurrentValue,
+			Profile: e.ProfileValue,
+		}
+	}
+	output := jsonDiffOutput{
+		Source:  sourcePath,
+		Profile: profileName,
+		Entries: jsonEntries,
+	}
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(output)
 }

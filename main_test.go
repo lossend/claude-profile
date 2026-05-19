@@ -1228,6 +1228,402 @@ func profileLayerPath(repoRoot, profile, filename string) string {
 	return filepath.Join(repoRoot, "profiles", profile, "layers", filename)
 }
 
+func TestDiffShowsNoDifferencesWhenSettingsMatchProfile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	settings := map[string]any{
+		"model": "claude-sonnet-4",
+		"env": map[string]any{
+			"LOG_LEVEL": "info",
+		},
+	}
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	writeJSONFileForTest(t, settingsPath, settings)
+
+	// Create profile from current settings
+	_, _, err := runCLI(t, "create", "test")
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// Diff should show no differences
+	stdout, _, err := runCLI(t, "diff", "test")
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	if !strings.Contains(stdout, "No differences") {
+		t.Errorf("expected 'No differences', got: %s", stdout)
+	}
+}
+
+func TestDiffShowsAdditionsWhenProfileHasExtraKeys(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Current settings
+	settings := map[string]any{
+		"model": "claude-sonnet-4",
+	}
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	writeJSONFileForTest(t, settingsPath, settings)
+
+	// Create profile
+	_, _, err := runCLI(t, "create", "test")
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// Add extra key to profile
+	repoRoot := filepath.Join(home, ".claude-profile")
+	layerPath := profileLayerPath(repoRoot, "test", "010-config.json")
+	layer := readJSONFileForTest(t, layerPath)
+	layer["env"] = map[string]any{"NEW_VAR": "value"}
+	writeJSONFileForTest(t, layerPath, layer)
+
+	// Diff should show addition
+	stdout, _, err := runCLI(t, "diff", "test")
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	if !strings.Contains(stdout, "+ profile:") {
+		t.Errorf("expected addition marker, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "env.NEW_VAR") {
+		t.Errorf("expected env.NEW_VAR in output, got: %s", stdout)
+	}
+}
+
+func TestDiffShowsRemovalsWhenSettingsHasExtraKeys(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Current settings - model goes to 90-shared.json in common on first create
+	// So we need to create profile first, then add a key that's profile-specific
+	settings := map[string]any{
+		"model": "claude-sonnet-4",
+	}
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	writeJSONFileForTest(t, settingsPath, settings)
+
+	// Create profile
+	_, _, err := runCLI(t, "create", "test")
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// Add a profile-specific key to the layer
+	repoRoot := filepath.Join(home, ".claude-profile")
+	layerPath := profileLayerPath(repoRoot, "test", "010-config.json")
+	layer := readJSONFileForTest(t, layerPath)
+	layer["customKey"] = "customValue"
+	writeJSONFileForTest(t, layerPath, layer)
+
+	// Now current settings doesn't have customKey, so diff should show it as addition
+	// Let's reverse: add customKey to settings, remove from profile
+	settings["customKey"] = "customValue"
+	writeJSONFileForTest(t, settingsPath, settings)
+
+	// Remove from profile
+	delete(layer, "customKey")
+	writeJSONFileForTest(t, layerPath, layer)
+
+	// Diff should show removal (key in current but not in profile)
+	stdout, _, err := runCLI(t, "diff", "test")
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	if !strings.Contains(stdout, "- current:") {
+		t.Errorf("expected removal marker, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "not in profile") {
+		t.Errorf("expected 'not in profile', got: %s", stdout)
+	}
+}
+
+func TestDiffShowsModificationsWhenValuesConflict(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Current settings
+	settings := map[string]any{
+		"model": "claude-sonnet-4",
+	}
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	writeJSONFileForTest(t, settingsPath, settings)
+
+	// Create profile
+	_, _, err := runCLI(t, "create", "test")
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// Modify value in profile
+	repoRoot := filepath.Join(home, ".claude-profile")
+	layerPath := profileLayerPath(repoRoot, "test", "010-config.json")
+	layer := readJSONFileForTest(t, layerPath)
+	layer["model"] = "claude-opus-4"
+	writeJSONFileForTest(t, layerPath, layer)
+
+	// Diff should show modification
+	stdout, _, err := runCLI(t, "diff", "test")
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	if !strings.Contains(stdout, "- current:") || !strings.Contains(stdout, "+ profile:") {
+		t.Errorf("expected both current and profile markers, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "claude-sonnet-4") || !strings.Contains(stdout, "claude-opus-4") {
+		t.Errorf("expected both model values, got: %s", stdout)
+	}
+}
+
+func TestDiffHandlesNestedObjectsWithDotNotation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Current settings - use a custom nested object that won't be split into common
+	settings := map[string]any{
+		"model": "claude-sonnet-4",
+	}
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	writeJSONFileForTest(t, settingsPath, settings)
+
+	// Create profile
+	_, _, err := runCLI(t, "create", "test")
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// Add a nested object to the profile layer
+	repoRoot := filepath.Join(home, ".claude-profile")
+	layerPath := profileLayerPath(repoRoot, "test", "010-config.json")
+	layer := readJSONFileForTest(t, layerPath)
+	layer["custom"] = map[string]any{
+		"nested": map[string]any{
+			"value": "original",
+		},
+	}
+	writeJSONFileForTest(t, layerPath, layer)
+
+	// Modify the nested value
+	customMap := layer["custom"].(map[string]any)
+	nestedMap := customMap["nested"].(map[string]any)
+	nestedMap["value"] = "modified"
+	writeJSONFileForTest(t, layerPath, layer)
+
+	// Diff should show dot notation path (profile has it, current doesn't)
+	stdout, _, err := runCLI(t, "diff", "test")
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	if !strings.Contains(stdout, "custom.nested.value") {
+		t.Errorf("expected dot notation path, got: %s", stdout)
+	}
+}
+
+func TestDiffHandlesArrayDifferences(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Current settings with array
+	settings := map[string]any{
+		"model": "claude-sonnet-4",
+	}
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	writeJSONFileForTest(t, settingsPath, settings)
+
+	// Create profile
+	_, _, err := runCLI(t, "create", "test")
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// Add array to profile layer
+	repoRoot := filepath.Join(home, ".claude-profile")
+	layerPath := profileLayerPath(repoRoot, "test", "010-config.json")
+	layer := readJSONFileForTest(t, layerPath)
+	layer["customArray"] = []any{"item1", "item2"}
+	writeJSONFileForTest(t, layerPath, layer)
+
+	// Modify array in profile
+	layer["customArray"] = []any{"item1", "item2", "item3"}
+	writeJSONFileForTest(t, layerPath, layer)
+
+	// Diff should show array difference
+	stdout, _, err := runCLI(t, "diff", "test")
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	if !strings.Contains(stdout, "customArray") {
+		t.Errorf("expected customArray in output, got: %s", stdout)
+	}
+}
+
+func TestDiffIncludesSecretLayerInMerge(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Current settings
+	settings := map[string]any{
+		"model": "claude-sonnet-4",
+		"env": map[string]any{
+			"API_KEY": "old-secret",
+		},
+	}
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	writeJSONFileForTest(t, settingsPath, settings)
+
+	// Create profile
+	_, _, err := runCLI(t, "create", "test")
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// Modify secret
+	repoRoot := filepath.Join(home, ".claude-profile")
+	secretPath := filepath.Join(repoRoot, "secrets", "test.json")
+	secrets := readJSONFileForTest(t, secretPath)
+	envMap := secrets["env"].(map[string]any)
+	envMap["API_KEY"] = "new-secret"
+	writeJSONFileForTest(t, secretPath, secrets)
+
+	// Diff should show secret difference
+	stdout, _, err := runCLI(t, "diff", "test")
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	if !strings.Contains(stdout, "env.API_KEY") {
+		t.Errorf("expected env.API_KEY in output, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "new-secret") {
+		t.Errorf("expected new-secret in output, got: %s", stdout)
+	}
+}
+
+func TestDiffReturnsErrorForNonExistentProfile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	settings := map[string]any{"model": "claude-sonnet-4"}
+	writeJSONFileForTest(t, filepath.Join(home, ".claude", "settings.json"), settings)
+
+	// Initialize repo
+	_, _, err := runCLI(t, "create", "dummy")
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// Diff non-existent profile
+	_, stderr, err := runCLI(t, "diff", "ghost")
+	if err == nil {
+		t.Fatal("expected error for non-existent profile")
+	}
+	errMsg := err.Error() + stderr
+	if !strings.Contains(errMsg, "not found") {
+		t.Errorf("expected 'not found' in error, got: %s", errMsg)
+	}
+}
+
+func TestDiffJSONOutputIsValidJSON(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Current settings
+	settings := map[string]any{
+		"model": "claude-sonnet-4",
+	}
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	writeJSONFileForTest(t, settingsPath, settings)
+
+	// Create profile
+	_, _, err := runCLI(t, "create", "test")
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// Modify profile
+	repoRoot := filepath.Join(home, ".claude-profile")
+	layerPath := profileLayerPath(repoRoot, "test", "010-config.json")
+	layer := readJSONFileForTest(t, layerPath)
+	layer["model"] = "claude-opus-4"
+	writeJSONFileForTest(t, layerPath, layer)
+
+	// Get JSON output
+	stdout, _, err := runCLI(t, "diff", "test", "--json")
+	if err != nil {
+		t.Fatalf("diff --json failed: %v", err)
+	}
+
+	// Parse JSON
+	var output map[string]any
+	if err := json.Unmarshal([]byte(stdout), &output); err != nil {
+		t.Fatalf("invalid JSON output: %v\noutput: %s", err, stdout)
+	}
+
+	// Verify structure
+	if output["source"] == nil || output["profile"] == nil || output["entries"] == nil {
+		t.Errorf("missing expected fields in JSON output: %v", output)
+	}
+}
+
+func TestDiffSourceFlagOverridesDefaultPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Create profile from default settings
+	defaultSettings := map[string]any{"model": "claude-sonnet-4"}
+	writeJSONFileForTest(t, filepath.Join(home, ".claude", "settings.json"), defaultSettings)
+	_, _, err := runCLI(t, "create", "test")
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// Create alternate settings file
+	altSettings := map[string]any{"model": "claude-opus-4"}
+	altPath := filepath.Join(home, "alt-settings.json")
+	writeJSONFileForTest(t, altPath, altSettings)
+
+	// Diff with --source flag
+	stdout, _, err := runCLI(t, "diff", "test", "--source", altPath)
+	if err != nil {
+		t.Fatalf("diff with --source failed: %v", err)
+	}
+
+	// Should show difference between alt settings and profile
+	if !strings.Contains(stdout, "claude-opus-4") {
+		t.Errorf("expected alt settings value in output, got: %s", stdout)
+	}
+}
+
+func TestDiffHandlesMissingSettingsFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Create profile from settings
+	settings := map[string]any{"model": "claude-sonnet-4"}
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	writeJSONFileForTest(t, settingsPath, settings)
+	_, _, err := runCLI(t, "create", "test")
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// Remove settings file
+	if err := os.Remove(settingsPath); err != nil {
+		t.Fatalf("failed to remove settings: %v", err)
+	}
+
+	// Diff should treat missing file as empty and show all profile keys as additions
+	stdout, _, err := runCLI(t, "diff", "test")
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	if !strings.Contains(stdout, "+ profile:") {
+		t.Errorf("expected additions when settings missing, got: %s", stdout)
+	}
+}
+
 func starterProfileLayerPath(repoRoot, profile string) string {
 	return profileLayerPath(repoRoot, profile, "010-config.json")
 }
