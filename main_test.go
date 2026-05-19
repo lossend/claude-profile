@@ -1625,6 +1625,53 @@ func TestDiffHandlesMissingSettingsFile(t *testing.T) {
 	}
 }
 
+func TestDiffUsesActiveProfileWhenNoArgumentProvided(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Create settings and profile
+	settings := map[string]any{"model": "claude-sonnet-4"}
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	writeJSONFileForTest(t, settingsPath, settings)
+	_, _, err := runCLI(t, "create", "test")
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// Diff without argument should use active profile
+	stdout, _, err := runCLI(t, "diff")
+	if err != nil {
+		t.Fatalf("diff without argument failed: %v", err)
+	}
+	if !strings.Contains(stdout, `profile "test"`) {
+		t.Errorf("expected active profile 'test' in output, got: %s", stdout)
+	}
+}
+
+func TestDiffReturnsErrorWhenNoActiveProfileAndNoArgument(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Create settings but no profile
+	settings := map[string]any{"model": "claude-sonnet-4"}
+	writeJSONFileForTest(t, filepath.Join(home, ".claude", "settings.json"), settings)
+
+	// Initialize repo without creating a profile
+	repoRoot := filepath.Join(home, ".claude-profile")
+	if err := os.MkdirAll(filepath.Join(repoRoot, "common"), 0o755); err != nil {
+		t.Fatalf("failed to create repo: %v", err)
+	}
+
+	// Diff without argument and no active profile should error
+	_, _, err := runCLI(t, "diff")
+	if err == nil {
+		t.Fatal("expected error when no active profile and no argument")
+	}
+	if !strings.Contains(err.Error(), "no active profile") {
+		t.Errorf("expected 'no active profile' in error, got: %v", err)
+	}
+}
+
 func starterProfileLayerPath(repoRoot, profile string) string {
 	return profileLayerPath(repoRoot, profile, "010-config.json")
 }

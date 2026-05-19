@@ -163,9 +163,9 @@ func newDiffCmd() *cobra.Command {
 	var jsonOutput bool
 
 	cmd := &cobra.Command{
-		Use:               "diff <name>",
-		Short:             "Compare current settings against a profile",
-		Args:              cobra.ExactArgs(1),
+		Use:               "diff [name]",
+		Short:             "Compare current settings against a profile (defaults to active profile)",
+		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: completeProfileNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			app, err := newApp()
@@ -175,7 +175,20 @@ func newDiffCmd() *cobra.Command {
 			if sourcePath == "" {
 				sourcePath = filepath.Join(app.home, ".claude", "settings.json")
 			}
-			return app.diffProfile(cmd.OutOrStdout(), args[0], sourcePath, jsonOutput)
+
+			// If no profile name provided, use active profile
+			var profileName string
+			if len(args) == 0 {
+				active, err := app.readActiveProfile()
+				if err != nil {
+					return fmt.Errorf("no profile specified and no active profile found: %w", err)
+				}
+				profileName = active
+			} else {
+				profileName = args[0]
+			}
+
+			return app.diffProfile(cmd.OutOrStdout(), profileName, sourcePath, jsonOutput)
 		},
 	}
 
@@ -1040,6 +1053,20 @@ func (a *app) writeActiveProfile(name string) error {
 		Name:      name,
 		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
 	}))
+}
+
+func (a *app) readActiveProfile() (string, error) {
+	active, err := a.readOptionalJSONFile(filepath.Join(a.repoRoot, "state", "active.json"))
+	if err != nil {
+		return "", err
+	}
+	if active == nil {
+		return "", fmt.Errorf("no active profile set")
+	}
+	if name, ok := active["name"].(string); ok && name != "" {
+		return name, nil
+	}
+	return "", fmt.Errorf("active profile name not found")
 }
 
 func (a *app) writeAtomicJSON(path string, data map[string]any) error {

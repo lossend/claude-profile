@@ -143,10 +143,14 @@ Useful flags:
 
 ### `diff`
 
-Compare the current Claude settings against what a profile would produce when applied.
+Compare the current Claude settings against what a profile would produce when applied. If no profile name is provided, uses the currently active profile.
 
 ```bash
+# Compare against a specific profile
 claude-profile diff work
+
+# Compare against the active profile
+claude-profile diff
 ```
 
 Shows a colored diff with:
