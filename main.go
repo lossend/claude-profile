@@ -1588,7 +1588,25 @@ func writeDiffHuman(w io.Writer, sourcePath, profileName string, entries []diffE
 		return err
 	}
 
-	fmt.Fprintf(w, "Diff: %s ↔ profile %q\n\n", sourcePath, profileName)
+	// Count different types of changes
+	var added, removed, modified int
+	for _, e := range entries {
+		switch e.Kind {
+		case "added":
+			added++
+		case "removed":
+			removed++
+		case "modified":
+			modified++
+		}
+	}
+
+	fmt.Fprintf(w, "Diff: %s ↔ profile %q\n", sourcePath, profileName)
+	fmt.Fprintf(w, "%d changes: %s%d added%s, %s%d removed%s, %s%d modified%s\n\n",
+		len(entries),
+		colorGreen, added, colorReset,
+		colorRed, removed, colorReset,
+		colorCyan, modified, colorReset)
 
 	for _, e := range entries {
 		fmt.Fprintf(w, "  %s%s%s:\n", colorCyan, e.Path, colorReset)

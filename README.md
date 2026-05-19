@@ -168,6 +168,7 @@ Example output:
 
 ```
 Diff: ~/.claude/settings.json ↔ profile "work"
+3 changes: 1 added, 0 removed, 2 modified
 
   model:
     - current: "claude-sonnet-4-20250514"
@@ -180,6 +181,8 @@ Diff: ~/.claude/settings.json ↔ profile "work"
     - current: sk-12...f8ab
     + profile: sk-98...3def
 ```
+
+The summary line shows the total number of changes and breaks them down by type (added, removed, modified) with color coding.
 
 Sensitive fields (containing TOKEN, PASSWORD, SECRET, or ending with _KEY) are automatically masked to protect credentials.
 
