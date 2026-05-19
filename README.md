@@ -163,6 +163,7 @@ Useful flags:
 
 - `--source`: compare against a non-default settings file
 - `--json`: output structured JSON instead of colored terminal output
+- `-v, --verbose`: show full formatted values for complex objects/arrays (default shows size summary)
 
 Example output:
 
@@ -180,6 +181,36 @@ Diff: ~/.claude/settings.json ↔ profile "work"
   env.API_KEY:
     - current: sk-12...f8ab
     + profile: sk-98...3def
+```
+
+For complex values (arrays/objects), the default output shows size information:
+
+```
+  hooks.PostToolUse:
+    - current: <444 chars, 1 lines> [{"hooks":[{"command":"~/.claude/hooks/...
+    + profile: <594 chars, 1 lines> [{"hooks":[{"command":"~/.claude/hooks/...
+```
+
+Use `--verbose` or `-v` to see full formatted JSON for complex values:
+
+```
+  hooks.PostToolUse:
+    - current: 
+      [
+        {
+          "hooks": [...],
+          "matcher": "ExitPlanMode"
+        },
+        ...
+      ]
+    + profile: 
+      [
+        {
+          "hooks": [...],
+          "matcher": "ExitPlanMode"
+        },
+        ...
+      ]
 ```
 
 The summary line shows the total number of changes and breaks them down by type (added, removed, modified) with color coding.

@@ -3,6 +3,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -161,6 +162,7 @@ func newApplyCmd() *cobra.Command {
 func newDiffCmd() *cobra.Command {
 	var sourcePath string
 	var jsonOutput bool
+	var verbose bool
 
 	cmd := &cobra.Command{
 		Use:               "diff [name]",
@@ -188,12 +190,13 @@ func newDiffCmd() *cobra.Command {
 				profileName = args[0]
 			}
 
-			return app.diffProfile(cmd.OutOrStdout(), profileName, sourcePath, jsonOutput)
+			return app.diffProfile(cmd.OutOrStdout(), profileName, sourcePath, jsonOutput, verbose)
 		},
 	}
 
 	cmd.Flags().StringVar(&sourcePath, "source", "", "Source Claude settings path (default: ~/.claude/settings.json)")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output diff as JSON")
+	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show full values for complex objects/arrays")
 	return cmd
 }
 
@@ -1446,7 +1449,7 @@ type diffEntry struct {
 	Kind         string // "added", "removed", "modified"
 }
 
-func (a *app) diffProfile(stdout io.Writer, name, sourcePath string, jsonOutput bool) error {
+func (a *app) diffProfile(stdout io.Writer, name, sourcePath string, jsonOutput, verbose bool) error {
 	// 1. Verify profile exists
 	if _, err := os.Stat(a.profileManifestPath(name)); err != nil {
 		return fmt.Errorf("profile %q not found", name)
@@ -1485,7 +1488,7 @@ func (a *app) diffProfile(stdout io.Writer, name, sourcePath string, jsonOutput 
 	if jsonOutput {
 		return writeDiffJSON(stdout, sourcePath, name, entries)
 	}
-	return writeDiffHuman(stdout, sourcePath, name, entries)
+	return writeDiffHuman(stdout, sourcePath, name, entries, verbose)
 }
 
 func computeDiffEntries(current, profile map[string]any, prefix string) []diffEntry {
@@ -1582,7 +1585,7 @@ func sortedKeys(m map[string]any) []string {
 	return keys
 }
 
-func writeDiffHuman(w io.Writer, sourcePath, profileName string, entries []diffEntry) error {
+func writeDiffHuman(w io.Writer, sourcePath, profileName string, entries []diffEntry, verbose bool) error {
 	if len(entries) == 0 {
 		_, err := fmt.Fprintf(w, "No differences: %s matches profile %q\n", sourcePath, profileName)
 		return err
@@ -1616,13 +1619,13 @@ func writeDiffHuman(w io.Writer, sourcePath, profileName string, entries []diffE
 
 		switch e.Kind {
 		case "added":
-			fmt.Fprintf(w, "    %s+ profile: %s%s\n", colorGreen, formatValueWithMask(e.ProfileValue, isSensitive), colorReset)
+			fmt.Fprintf(w, "    %s+ profile: %s%s\n", colorGreen, formatValueWithMaskAndVerbose(e.ProfileValue, isSensitive, verbose), colorReset)
 		case "removed":
-			fmt.Fprintf(w, "    %s- current: %s%s\n", colorRed, formatValueWithMask(e.CurrentValue, isSensitive), colorReset)
+			fmt.Fprintf(w, "    %s- current: %s%s\n", colorRed, formatValueWithMaskAndVerbose(e.CurrentValue, isSensitive, verbose), colorReset)
 			fmt.Fprintf(w, "    %s  (not in profile)%s\n", colorRed, colorReset)
 		case "modified":
-			fmt.Fprintf(w, "    %s- current: %s%s\n", colorRed, formatValueWithMask(e.CurrentValue, isSensitive), colorReset)
-			fmt.Fprintf(w, "    %s+ profile: %s%s\n", colorGreen, formatValueWithMask(e.ProfileValue, isSensitive), colorReset)
+			fmt.Fprintf(w, "    %s- current: %s%s\n", colorRed, formatValueWithMaskAndVerbose(e.CurrentValue, isSensitive, verbose), colorReset)
+			fmt.Fprintf(w, "    %s+ profile: %s%s\n", colorGreen, formatValueWithMaskAndVerbose(e.ProfileValue, isSensitive, verbose), colorReset)
 		}
 		fmt.Fprintln(w)
 	}
@@ -1640,6 +1643,10 @@ func isSensitiveKeyPath(path string) bool {
 }
 
 func formatValueWithMask(v any, maskSensitive bool) string {
+	return formatValueWithMaskAndVerbose(v, maskSensitive, false)
+}
+
+func formatValueWithMaskAndVerbose(v any, maskSensitive, verbose bool) string {
 	if v == nil {
 		return "<absent>"
 	}
@@ -1656,7 +1663,41 @@ func formatValueWithMask(v any, maskSensitive bool) string {
 	if err != nil {
 		return fmt.Sprintf("%v", v)
 	}
-	return string(raw)
+
+	str := string(raw)
+
+	// In verbose mode, show full value with pretty formatting for complex types
+	if verbose {
+		// Pretty print for arrays and objects
+		if strings.HasPrefix(str, "[") || strings.HasPrefix(str, "{") {
+			var prettyJSON bytes.Buffer
+			if err := json.Indent(&prettyJSON, raw, "      ", "  "); err == nil {
+				return "\n      " + prettyJSON.String()
+			}
+		}
+		return str
+	}
+
+	// For complex values (arrays/objects), show size info in non-verbose mode
+	if len(str) > 100 {
+		lines := strings.Count(str, "\n") + 1
+		return fmt.Sprintf("<%d chars, %d lines> %s...", len(str), lines, truncateString(str, 80))
+	}
+
+	return str
+}
+
+func truncateString(s string, maxLen int) string {
+	// Remove newlines for preview
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", "")
+	// Collapse multiple spaces
+	s = strings.Join(strings.Fields(s), " ")
+
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen]
 }
 
 func maskSensitiveValue(value string) string {
