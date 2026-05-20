@@ -52,6 +52,12 @@ Preview what would change before applying a profile:
 claude-profile diff work
 ```
 
+Export the fully merged settings snapshot for a profile:
+
+```bash
+claude-profile export work
+```
+
 Apply a profile back into Claude:
 
 ```bash
@@ -140,6 +146,27 @@ claude-profile apply work
 Useful flags:
 
 - `--target`: write to a non-default settings file
+
+### `export`
+
+Export a complete settings snapshot for a profile without touching `~/.claude/settings.json`.
+
+```bash
+claude-profile export work
+```
+
+By default, `export` writes `settings-work.json` to the current working directory. The exported file uses the same merged result as `apply`:
+
+- `common/*.json`
+- `profiles/<name>/layers/*.json`
+- `secrets/<name>.json`
+
+If the local secret file is missing, `export` prints a warning and still writes the non-secret snapshot.
+
+Useful flags:
+
+- `--output`, `-o`: write to a custom output path
+- `--force`: overwrite an existing output file
 
 ### `diff`
 

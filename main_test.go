@@ -446,6 +446,242 @@ func TestApplyWarnsWhenSecretFileMissing(t *testing.T) {
 	}
 }
 
+func TestExportWritesMergedSettingsSnapshotFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	outputDir := t.TempDir()
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd failed: %v", err)
+	}
+	if err := os.Chdir(outputDir); err != nil {
+		t.Fatalf("chdir failed: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(originalWD); err != nil {
+			t.Fatalf("restore chdir failed: %v", err)
+		}
+	})
+
+	repoRoot := filepath.Join(home, ".claude-profile")
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "common", "10-base.json"), map[string]any{
+		"model": "common-model",
+		"nested": map[string]any{
+			"shared": "common",
+		},
+	})
+	writeJSONFileForTest(t, profileManifestPath(repoRoot, "openai"), map[string]any{
+		"name": "openai",
+	})
+	writeJSONFileForTest(t, starterProfileLayerPath(repoRoot, "openai"), map[string]any{
+		"provider": "openai",
+		"nested": map[string]any{
+			"level": "profile",
+		},
+	})
+	writeJSONFileForTest(t, profileLayerPath(repoRoot, "openai", "020-models.json"), map[string]any{
+		"model": "gpt-4.1",
+	})
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "secrets", "openai.json"), map[string]any{
+		"env": map[string]any{
+			"OPENAI_API_KEY": "super-secret",
+		},
+	})
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "state", "active.json"), map[string]any{
+		"name": "other",
+	})
+
+	stdout, stderr, err := runCLI(t, "export", "openai")
+	if err != nil {
+		t.Fatalf("export failed: %v\nstdout=%s\nstderr=%s", err, stdout, stderr)
+	}
+
+	exportPath := filepath.Join(outputDir, "settings-openai.json")
+	exported := readJSONFileForTest(t, exportPath)
+	if exported["model"] != "gpt-4.1" {
+		t.Fatalf("expected later profile layer to win, got %#v", exported)
+	}
+	if exported["provider"] != "openai" {
+		t.Fatalf("expected profile fields in export, got %#v", exported)
+	}
+	if exported["env"].(map[string]any)["OPENAI_API_KEY"] != "super-secret" {
+		t.Fatalf("expected secret overlay in export, got %#v", exported)
+	}
+	nested := exported["nested"].(map[string]any)
+	if nested["shared"] != "common" || nested["level"] != "profile" {
+		t.Fatalf("expected recursive merge in export, got %#v", nested)
+	}
+
+	if !strings.Contains(stdout, `exported profile "openai"`) {
+		t.Fatalf("expected success output, got %q", stdout)
+	}
+	if !strings.Contains(stdout, exportPath) {
+		t.Fatalf("expected export path in output, got %q", stdout)
+	}
+
+	active := readJSONFileForTest(t, filepath.Join(repoRoot, "state", "active.json"))
+	if active["name"] != "other" {
+		t.Fatalf("expected active profile to remain unchanged, got %#v", active)
+	}
+
+	backupEntries, err := os.ReadDir(filepath.Join(repoRoot, "backups"))
+	if err != nil {
+		t.Fatalf("read backups dir failed: %v", err)
+	}
+	if len(backupEntries) != 0 {
+		t.Fatalf("expected export not to create backup files, got %d", len(backupEntries))
+	}
+}
+
+func TestExportWarnsWhenSecretFileMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	outputDir := t.TempDir()
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd failed: %v", err)
+	}
+	if err := os.Chdir(outputDir); err != nil {
+		t.Fatalf("chdir failed: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(originalWD); err != nil {
+			t.Fatalf("restore chdir failed: %v", err)
+		}
+	})
+
+	repoRoot := filepath.Join(home, ".claude-profile")
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "common", "10-base.json"), map[string]any{
+		"model": "common-model",
+	})
+	writeJSONFileForTest(t, profileManifestPath(repoRoot, "openai"), map[string]any{
+		"name": "openai",
+	})
+	writeJSONFileForTest(t, starterProfileLayerPath(repoRoot, "openai"), map[string]any{
+		"model": "profile-model",
+	})
+
+	_, stderr, err := runCLI(t, "export", "openai")
+	if err != nil {
+		t.Fatalf("export failed: %v\nstderr=%s", err, stderr)
+	}
+	if !strings.Contains(stderr, "warning") || !strings.Contains(stderr, "secret") {
+		t.Fatalf("expected warning about missing secret file, got %q", stderr)
+	}
+
+	exported := readJSONFileForTest(t, filepath.Join(outputDir, "settings-openai.json"))
+	if exported["model"] != "profile-model" {
+		t.Fatalf("expected export to succeed without secret file, got %#v", exported)
+	}
+}
+
+func TestExportRejectsExistingOutputFileWithoutForce(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	outputDir := t.TempDir()
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd failed: %v", err)
+	}
+	if err := os.Chdir(outputDir); err != nil {
+		t.Fatalf("chdir failed: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(originalWD); err != nil {
+			t.Fatalf("restore chdir failed: %v", err)
+		}
+	})
+
+	repoRoot := filepath.Join(home, ".claude-profile")
+	writeJSONFileForTest(t, profileManifestPath(repoRoot, "openai"), map[string]any{
+		"name": "openai",
+	})
+	writeJSONFileForTest(t, starterProfileLayerPath(repoRoot, "openai"), map[string]any{
+		"model": "profile-model",
+	})
+	exportPath := filepath.Join(outputDir, "settings-openai.json")
+	writeJSONFileForTest(t, exportPath, map[string]any{
+		"model": "stale-model",
+	})
+
+	stdout, stderr, err := runCLI(t, "export", "openai")
+	if err == nil {
+		t.Fatalf("expected export to fail when output exists\nstdout=%s\nstderr=%s", stdout, stderr)
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected already exists error, got %v", err)
+	}
+
+	exported := readJSONFileForTest(t, exportPath)
+	if exported["model"] != "stale-model" {
+		t.Fatalf("expected existing export file to remain unchanged, got %#v", exported)
+	}
+}
+
+func TestExportForceOverwritesCustomOutputPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	repoRoot := filepath.Join(home, ".claude-profile")
+	writeJSONFileForTest(t, filepath.Join(repoRoot, "common", "10-base.json"), map[string]any{
+		"model": "common-model",
+	})
+	writeJSONFileForTest(t, profileManifestPath(repoRoot, "openai"), map[string]any{
+		"name": "openai",
+	})
+	writeJSONFileForTest(t, starterProfileLayerPath(repoRoot, "openai"), map[string]any{
+		"provider": "openai",
+	})
+
+	outputPath := filepath.Join(t.TempDir(), "nested", "custom-settings.json")
+	writeJSONFileForTest(t, outputPath, map[string]any{
+		"model": "stale-model",
+	})
+
+	stdout, stderr, err := runCLI(t, "export", "openai", "--output", outputPath, "--force")
+	if err != nil {
+		t.Fatalf("export failed: %v\nstdout=%s\nstderr=%s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, outputPath) {
+		t.Fatalf("expected custom output path in stdout, got %q", stdout)
+	}
+
+	exported := readJSONFileForTest(t, outputPath)
+	if exported["model"] != "common-model" || exported["provider"] != "openai" {
+		t.Fatalf("expected force export to overwrite file with merged config, got %#v", exported)
+	}
+}
+
+func TestExportCommandCompletesProfileNames(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	repoRoot := filepath.Join(home, ".claude-profile")
+	writeJSONFileForTest(t, profileManifestPath(repoRoot, "openai"), map[string]any{
+		"name": "openai",
+	})
+	writeJSONFileForTest(t, starterProfileLayerPath(repoRoot, "openai"), map[string]any{
+		"model": "gpt-4.1",
+	})
+	writeJSONFileForTest(t, profileManifestPath(repoRoot, "bedrock"), map[string]any{
+		"name": "bedrock",
+	})
+	writeJSONFileForTest(t, starterProfileLayerPath(repoRoot, "bedrock"), map[string]any{
+		"model": "claude-sonnet",
+	})
+
+	stdout, stderr, err := runCLI(t, "__complete", "export", "")
+	if err != nil {
+		t.Fatalf("completion failed: %v\nstderr=%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "openai") || !strings.Contains(stdout, "bedrock") {
+		t.Fatalf("expected profile names in completion output, got %q", stdout)
+	}
+}
+
 func TestListShowsProfilesFilesSecretsAndActiveMarker(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

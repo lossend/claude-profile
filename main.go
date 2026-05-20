@@ -97,6 +97,7 @@ func newRootCmd() *cobra.Command {
 
 	root.AddCommand(newCreateCmd())
 	root.AddCommand(newApplyCmd())
+	root.AddCommand(newExportCmd())
 	root.AddCommand(newDiffCmd())
 	root.AddCommand(newDeleteCmd())
 	root.AddCommand(newRenameCmd())
@@ -156,6 +157,29 @@ func newApplyCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&targetPath, "target", "", "Target Claude settings path")
+	return cmd
+}
+
+func newExportCmd() *cobra.Command {
+	var outputPath string
+	var force bool
+
+	cmd := &cobra.Command{
+		Use:               "export <name>",
+		Short:             "Export a complete settings snapshot for a profile",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeProfileNames,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			app, err := newApp()
+			if err != nil {
+				return err
+			}
+			return app.exportProfile(cmd.OutOrStdout(), cmd.ErrOrStderr(), args[0], outputPath, force)
+		},
+	}
+
+	cmd.Flags().StringVarP(&outputPath, "output", "o", "", "Output settings snapshot path (default: ./settings-<name>.json)")
+	cmd.Flags().BoolVar(&force, "force", false, "Overwrite an existing output file")
 	return cmd
 }
 
@@ -417,26 +441,13 @@ func (a *app) applyProfile(stdout, stderr io.Writer, name, targetPath string) er
 		return err
 	}
 
-	if _, err := os.Stat(a.profileManifestPath(name)); err != nil {
-		return fmt.Errorf("profile %q not found", name)
-	}
-
-	merged, err := a.mergeIntoExisting(map[string]any{}, filepath.Join(a.repoRoot, "common"), nil)
+	merged, missingSecret, err := a.renderProfile(name)
 	if err != nil {
 		return err
 	}
-	merged, err = a.mergeIntoExisting(merged, a.profileLayersDir(name), nil)
-	if err != nil {
-		return err
-	}
-
-	secretPath := filepath.Join(a.repoRoot, "secrets", name+".json")
-	if secretConfig, err := a.readOptionalJSONFile(secretPath); err != nil {
-		return err
-	} else if secretConfig == nil {
+	if missingSecret {
+		secretPath := filepath.Join(a.repoRoot, "secrets", name+".json")
 		fmt.Fprintf(stderr, "warning: secret override %s not found\n", secretPath)
-	} else {
-		merged = mergeMaps(merged, secretConfig)
 	}
 
 	if err := a.backupTarget(targetPath); err != nil {
@@ -449,6 +460,36 @@ func (a *app) applyProfile(stdout, stderr io.Writer, name, targetPath string) er
 		return err
 	}
 	_, err = fmt.Fprintf(stdout, "applied profile %q to %s\n", name, targetPath)
+	return err
+}
+
+func (a *app) exportProfile(stdout, stderr io.Writer, name, outputPath string, force bool) error {
+	merged, missingSecret, err := a.renderProfile(name)
+	if err != nil {
+		return err
+	}
+
+	if missingSecret {
+		secretPath := filepath.Join(a.repoRoot, "secrets", name+".json")
+		fmt.Fprintf(stderr, "warning: secret override %s not found\n", secretPath)
+	}
+
+	if outputPath == "" {
+		outputPath = fmt.Sprintf("settings-%s.json", name)
+	}
+	outputPath, err = filepath.Abs(outputPath)
+	if err != nil {
+		return fmt.Errorf("resolve output path: %w", err)
+	}
+
+	if pathExists(outputPath) && !force {
+		return fmt.Errorf("output file %q already exists; use --force to overwrite", outputPath)
+	}
+	if err := a.writeAtomicJSON(outputPath, merged); err != nil {
+		return err
+	}
+
+	_, err = fmt.Fprintf(stdout, "exported profile %q to %s\n", name, outputPath)
 	return err
 }
 
@@ -1450,30 +1491,13 @@ type diffEntry struct {
 }
 
 func (a *app) diffProfile(stdout io.Writer, name, sourcePath string, jsonOutput, verbose bool) error {
-	// 1. Verify profile exists
-	if _, err := os.Stat(a.profileManifestPath(name)); err != nil {
-		return fmt.Errorf("profile %q not found", name)
-	}
-
-	// 2. Build merged profile (same as applyProfile, but without ensureRepoDirs)
-	merged, err := a.mergeIntoExisting(map[string]any{}, filepath.Join(a.repoRoot, "common"), nil)
-	if err != nil {
-		return err
-	}
-	merged, err = a.mergeIntoExisting(merged, a.profileLayersDir(name), nil)
+	// 1. Build merged profile (silently skipping missing secrets)
+	merged, _, err := a.renderProfile(name)
 	if err != nil {
 		return err
 	}
 
-	// 3. Merge secrets (silently skip if missing)
-	secretPath := filepath.Join(a.repoRoot, "secrets", name+".json")
-	if secretConfig, err := a.readOptionalJSONFile(secretPath); err != nil {
-		return err
-	} else if secretConfig != nil {
-		merged = mergeMaps(merged, secretConfig)
-	}
-
-	// 4. Read current settings (treat missing as empty map)
+	// 2. Read current settings (treat missing as empty map)
 	current, err := a.readJSONFile(sourcePath)
 	if errors.Is(err, os.ErrNotExist) {
 		current = map[string]any{}
@@ -1481,14 +1505,39 @@ func (a *app) diffProfile(stdout io.Writer, name, sourcePath string, jsonOutput,
 		return fmt.Errorf("read source settings: %w", err)
 	}
 
-	// 5. Compute symmetric diff
+	// 3. Compute symmetric diff
 	entries := computeDiffEntries(current, merged, "")
 
-	// 6. Output
+	// 4. Output
 	if jsonOutput {
 		return writeDiffJSON(stdout, sourcePath, name, entries)
 	}
 	return writeDiffHuman(stdout, sourcePath, name, entries, verbose)
+}
+
+func (a *app) renderProfile(name string) (map[string]any, bool, error) {
+	if _, err := os.Stat(a.profileManifestPath(name)); err != nil {
+		return nil, false, fmt.Errorf("profile %q not found", name)
+	}
+
+	merged, err := a.mergeIntoExisting(map[string]any{}, filepath.Join(a.repoRoot, "common"), nil)
+	if err != nil {
+		return nil, false, err
+	}
+	merged, err = a.mergeIntoExisting(merged, a.profileLayersDir(name), nil)
+	if err != nil {
+		return nil, false, err
+	}
+
+	secretPath := filepath.Join(a.repoRoot, "secrets", name+".json")
+	secretConfig, err := a.readOptionalJSONFile(secretPath)
+	if err != nil {
+		return nil, false, err
+	}
+	if secretConfig == nil {
+		return merged, true, nil
+	}
+	return mergeMaps(merged, secretConfig), false, nil
 }
 
 func computeDiffEntries(current, profile map[string]any, prefix string) []diffEntry {
