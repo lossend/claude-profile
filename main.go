@@ -106,6 +106,8 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newCommitCmd())
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newCompletionCmd(root))
+	root.AddCommand(newCdCmd())
+	root.AddCommand(newOpenCmd())
 	return root
 }
 
@@ -1802,4 +1804,73 @@ func writeDiffJSON(w io.Writer, sourcePath, profileName string, entries []diffEn
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(output)
+}
+
+var defaultEditors = []string{"code", "zed", "yazhi", "nvim", "vim", "open"}
+
+func resolveEditor() (string, error) {
+	if env := os.Getenv("CLAUDE_PROFILE_EDITOR"); env != "" {
+		path, err := exec.LookPath(env)
+		if err != nil {
+			return "", fmt.Errorf("editor %q from CLAUDE_PROFILE_EDITOR not found in PATH", env)
+		}
+		return path, nil
+	}
+	for _, name := range defaultEditors {
+		path, err := exec.LookPath(name)
+		if err == nil {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("no suitable editor found; set CLAUDE_PROFILE_EDITOR or install one of: %s", strings.Join(defaultEditors, ", "))
+}
+
+func newCdCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "cd",
+		Short: "Print the profile repository path",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			a, err := newApp()
+			if err != nil {
+				return err
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), a.repoRoot)
+			return nil
+		},
+	}
+}
+
+func newOpenCmd() *cobra.Command {
+	var editor string
+	cmd := &cobra.Command{
+		Use:   "open",
+		Short: "Open the profile repository in an editor",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			a, err := newApp()
+			if err != nil {
+				return err
+			}
+			var editorPath string
+			if editor != "" {
+				editorPath, err = exec.LookPath(editor)
+				if err != nil {
+					return fmt.Errorf("editor %q not found in PATH", editor)
+				}
+			} else {
+				editorPath, err = resolveEditor()
+				if err != nil {
+					return err
+				}
+			}
+			c := exec.Command(editorPath, a.repoRoot)
+			c.Stdin = os.Stdin
+			c.Stdout = os.Stdout
+			c.Stderr = os.Stderr
+			return c.Run()
+		},
+	}
+	cmd.Flags().StringVar(&editor, "editor", "", "editor to use (overrides CLAUDE_PROFILE_EDITOR and default priority)")
+	return cmd
 }

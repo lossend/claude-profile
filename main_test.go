@@ -4,6 +4,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1910,4 +1911,100 @@ func TestDiffReturnsErrorWhenNoActiveProfileAndNoArgument(t *testing.T) {
 
 func starterProfileLayerPath(repoRoot, profile string) string {
 	return profileLayerPath(repoRoot, profile, "010-config.json")
+}
+
+func TestCdPrintsRepoRoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	stdout, _, err := runCLI(t, "cd")
+	if err != nil {
+		t.Fatalf("cd failed: %v", err)
+	}
+	expected := filepath.Join(home, ".claude-profile")
+	if strings.TrimSpace(stdout) != expected {
+		t.Fatalf("expected %q, got %q", expected, strings.TrimSpace(stdout))
+	}
+}
+
+func TestResolveEditorUsesEnvVar(t *testing.T) {
+	home := t.TempDir()
+	binDir := filepath.Join(home, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "myeditor"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	t.Setenv("CLAUDE_PROFILE_EDITOR", "myeditor")
+
+	path, err := resolveEditor()
+	if err != nil {
+		t.Fatalf("resolveEditor failed: %v", err)
+	}
+	if filepath.Base(path) != "myeditor" {
+		t.Fatalf("expected myeditor, got %q", path)
+	}
+}
+
+func TestResolveEditorFallsThrough(t *testing.T) {
+	home := t.TempDir()
+	binDir := filepath.Join(home, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "vim"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	t.Setenv("CLAUDE_PROFILE_EDITOR", "")
+
+	path, err := resolveEditor()
+	if err != nil {
+		t.Fatalf("resolveEditor failed: %v", err)
+	}
+	if filepath.Base(path) != "vim" {
+		t.Fatalf("expected vim, got %q", path)
+	}
+}
+
+func TestResolveEditorReturnsErrorWhenNoneFound(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PATH", filepath.Join(home, "empty-bin"))
+	t.Setenv("CLAUDE_PROFILE_EDITOR", "")
+
+	_, err := resolveEditor()
+	if err == nil {
+		t.Fatal("expected error when no editor found")
+	}
+}
+
+func TestOpenCommandLaunchesEditor(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	binDir := filepath.Join(home, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	argsFile := filepath.Join(home, "editor-args.txt")
+	script := fmt.Sprintf("#!/bin/sh\necho \"$@\" > %s\n", argsFile)
+	if err := os.WriteFile(filepath.Join(binDir, "code"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	t.Setenv("CLAUDE_PROFILE_EDITOR", "")
+
+	_, _, err := runCLI(t, "open")
+	if err != nil {
+		t.Fatalf("open failed: %v", err)
+	}
+	args, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("failed to read editor args: %v", err)
+	}
+	expected := filepath.Join(home, ".claude-profile")
+	if strings.TrimSpace(string(args)) != expected {
+		t.Fatalf("editor received %q, expected %q", strings.TrimSpace(string(args)), expected)
+	}
 }
