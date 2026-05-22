@@ -1257,11 +1257,30 @@ func confirmDelete(reader *bufio.Reader, stdout io.Writer, prompt, expected stri
 }
 
 func marshalJSON(data map[string]any) ([]byte, error) {
-	raw, err := json.MarshalIndent(data, "", "  ")
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(data); err != nil {
 		return nil, err
 	}
-	return append(raw, '\n'), nil
+	return buf.Bytes(), nil
+}
+
+// jsonMarshal marshals v to JSON without HTML escaping
+func jsonMarshal(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	// Encode appends a trailing newline — strip it
+	b := buf.Bytes()
+	if len(b) > 0 && b[len(b)-1] == '\n' {
+		b = b[:len(b)-1]
+	}
+	return b, nil
 }
 
 func diffValues(base, target any) map[string]any {
@@ -1713,7 +1732,7 @@ func formatValueWithMaskAndVerbose(v any, maskSensitive, verbose bool) string {
 		}
 	}
 
-	raw, err := json.Marshal(v)
+	raw, err := jsonMarshal(v)
 	if err != nil {
 		return fmt.Sprintf("%v", v)
 	}
@@ -1724,9 +1743,15 @@ func formatValueWithMaskAndVerbose(v any, maskSensitive, verbose bool) string {
 	if verbose {
 		// Pretty print for arrays and objects
 		if strings.HasPrefix(str, "[") || strings.HasPrefix(str, "{") {
-			var prettyJSON bytes.Buffer
-			if err := json.Indent(&prettyJSON, raw, "      ", "  "); err == nil {
-				return "\n      " + prettyJSON.String()
+			var buf bytes.Buffer
+			enc := json.NewEncoder(&buf)
+			enc.SetEscapeHTML(false)
+			enc.SetIndent("      ", "  ")
+			if err := enc.Encode(v); err == nil {
+				result := buf.String()
+				// Remove trailing newline from Encode
+				result = strings.TrimSuffix(result, "\n")
+				return "\n" + result
 			}
 		}
 		return str
@@ -1766,7 +1791,7 @@ func formatValue(v any) string {
 	if v == nil {
 		return "<absent>"
 	}
-	raw, err := json.Marshal(v)
+	raw, err := jsonMarshal(v)
 	if err != nil {
 		return fmt.Sprintf("%v", v)
 	}
@@ -1802,6 +1827,7 @@ func writeDiffJSON(w io.Writer, sourcePath, profileName string, entries []diffEn
 		Entries: jsonEntries,
 	}
 	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
 	return enc.Encode(output)
 }
