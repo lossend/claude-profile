@@ -785,19 +785,19 @@ func (a *app) ensureCompletionInstall(root *cobra.Command) error {
 			name:    "zsh",
 			rcPath:  filepath.Join(a.home, ".zshrc"),
 			command: "source <(claude-profile completion zsh)",
-			block:   "# claude-profile completion start\nsource <(claude-profile completion zsh)\n# claude-profile completion end\n",
+			block:   "# claude-profile completion start\nsource <(command claude-profile completion zsh)\nfunction claude-profile() {\n  if [[ \"$1\" == \"cd\" ]]; then\n    builtin cd \"$(command claude-profile cd)\" || return\n  else\n    command claude-profile \"$@\"\n  fi\n}\n# claude-profile completion end\n",
 		},
 		{
 			name:    "bash",
 			rcPath:  filepath.Join(a.home, ".bashrc"),
 			command: "source <(claude-profile completion bash)",
-			block:   "# claude-profile completion start\nsource <(claude-profile completion bash)\n# claude-profile completion end\n",
+			block:   "# claude-profile completion start\nsource <(command claude-profile completion bash)\nfunction claude-profile() {\n  if [[ \"$1\" == \"cd\" ]]; then\n    builtin cd \"$(command claude-profile cd)\" || return\n  else\n    command claude-profile \"$@\"\n  fi\n}\n# claude-profile completion end\n",
 		},
 		{
 			name:    "fish",
 			rcPath:  filepath.Join(a.home, ".config", "fish", "config.fish"),
 			command: "claude-profile completion fish | source",
-			block:   "# claude-profile completion start\nclaude-profile completion fish | source\n# claude-profile completion end\n",
+			block:   "# claude-profile completion start\ncommand claude-profile completion fish | source\nfunction claude-profile\n  if test \"$argv[1]\" = \"cd\"\n    builtin cd (command claude-profile cd)\n  else\n    command claude-profile $argv\n  end\nend\n# claude-profile completion end\n",
 		},
 	}
 
@@ -1212,13 +1212,46 @@ func ensureTextContains(path, marker, block string) error {
 		return err
 	}
 	content := string(raw)
-	if strings.Contains(content, marker) {
-		return nil
+
+	// Remove all existing claude-profile completion blocks
+	startMarker := "# claude-profile completion start"
+	endMarker := "# claude-profile completion end"
+
+	for {
+		startIdx := strings.Index(content, startMarker)
+		if startIdx == -1 {
+			break
+		}
+
+		// Find the end marker
+		endIdx := strings.Index(content[startIdx:], endMarker)
+		if endIdx == -1 {
+			// Malformed block, remove just the start marker line
+			lineEnd := strings.Index(content[startIdx:], "\n")
+			if lineEnd == -1 {
+				content = content[:startIdx]
+			} else {
+				content = content[:startIdx] + content[startIdx+lineEnd+1:]
+			}
+			continue
+		}
+
+		endIdx += startIdx + len(endMarker)
+		// Find the end of the line
+		if endIdx < len(content) && content[endIdx] == '\n' {
+			endIdx++
+		}
+
+		// Remove this block
+		content = content[:startIdx] + content[endIdx:]
 	}
-	if !strings.HasSuffix(content, "\n") {
+
+	// Add the new block at the end
+	if !strings.HasSuffix(content, "\n") && len(content) > 0 {
 		content += "\n"
 	}
 	content += block
+
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
@@ -1854,8 +1887,16 @@ func resolveEditor() (string, error) {
 func newCdCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "cd",
-		Short: "Print the profile repository path",
-		Args:  cobra.NoArgs,
+		Short: "Change to the profile repository directory (requires shell function)",
+		Long: `Change to the profile repository directory.
+
+This command prints the repository path. When used with the installed shell
+function (automatically added during first run), 'claude-profile cd' will
+change your shell's working directory to the profile repository.
+
+The shell function is installed in your shell RC file (.zshrc, .bashrc, or
+config.fish) and wraps the claude-profile command to enable directory changes.`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			a, err := newApp()
 			if err != nil {
