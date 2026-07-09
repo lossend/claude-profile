@@ -683,6 +683,47 @@ func TestExportCommandCompletesProfileNames(t *testing.T) {
 	}
 }
 
+func TestApplyReturnsErrorForMissingProfile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	stdout, stderr, err := runCLI(t, "apply", "does-not-exist")
+	if err == nil {
+		t.Fatalf("expected apply to fail for missing profile\nstdout=%s\nstderr=%s", stdout, stderr)
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected 'not found' in error, got %v", err)
+	}
+}
+
+func TestExportWritesToDirectoryWithDerivedFilename(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	repoRoot := filepath.Join(home, ".claude-profile")
+	writeJSONFileForTest(t, profileManifestPath(repoRoot, "openai"), map[string]any{
+		"name": "openai",
+	})
+	writeJSONFileForTest(t, starterProfileLayerPath(repoRoot, "openai"), map[string]any{
+		"model": "gpt-4.1",
+	})
+
+	outputDir := t.TempDir()
+	stdout, stderr, err := runCLI(t, "export", "openai", "--output", outputDir)
+	if err != nil {
+		t.Fatalf("export failed: %v\nstdout=%s\nstderr=%s", err, stdout, stderr)
+	}
+
+	expectedPath := filepath.Join(outputDir, "settings-openai.json")
+	exported := readJSONFileForTest(t, expectedPath)
+	if exported["model"] != "gpt-4.1" {
+		t.Fatalf("expected merged content in output file, got %#v", exported)
+	}
+	if !strings.Contains(stdout, expectedPath) {
+		t.Fatalf("expected output path in stdout, got %q", stdout)
+	}
+}
+
 func TestListShowsProfilesFilesSecretsAndActiveMarker(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

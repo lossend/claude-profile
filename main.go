@@ -72,6 +72,7 @@ type completionState struct {
 func main() {
 	cmd := newRootCmd()
 	if err := cmd.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 }
@@ -482,6 +483,9 @@ func (a *app) exportProfile(stdout, stderr io.Writer, name, outputPath string, f
 	outputPath, err = filepath.Abs(outputPath)
 	if err != nil {
 		return fmt.Errorf("resolve output path: %w", err)
+	}
+	if info, statErr := os.Stat(outputPath); statErr == nil && info.IsDir() {
+		outputPath = filepath.Join(outputPath, fmt.Sprintf("settings-%s.json", name))
 	}
 
 	if pathExists(outputPath) && !force {
